@@ -1,0 +1,52 @@
+[project]
+name = "degrseq"
+version = "0.1.0.dev0"
+description = "Subcommands for the rnadegradome pipeline: RNA 5' end mapping, cap classification and sRNA cleavage detection"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+authors = [{ name = "Nikolaos Vergoulidis" }]
+requires-python = ">=3.12"
+keywords = ["bioinformatics", "degradome", "nanopare", "rna-5-prime-ends", "small-rna", "cleavage"]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Intended Audience :: Science/Research",
+    "Operating System :: POSIX :: Linux",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering :: Bio-Informatics",
+    "Typing :: Typed",
+]
+# Upper bounds are deliberate: these decide numeric output, so golden-output parity holds only for the set in uv.lock.
+dependencies = [
+    "numpy>=1.26,<3",
+    "pysam>=0.22,<0.24",
+    "scipy>=1.11,<2",
+]
+
+[project.scripts]
+degrseq = "degrseq.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/degrseq"]
+
+[tool.hatch.build.targets.sdist]
+exclude = ["/tests", "/specs", "/.github"]
+
+[dependency-groups]
+dev = ["pre-commit>=4.0", "pytest>=8.0"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM", "RUF"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-q"
