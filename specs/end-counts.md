@@ -43,7 +43,7 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 5. **CIGAR positions.** Aligned positions are those consumed by `M`, `=`, `X`. `D` and `N` advance the reference without adding positions. `I`, `S`, `H` add none.
 6. **Reclaim (5P only).** For each soft-clip adjacent to the alignment, walk outward from the alignment edge base by base. A clipped base is reclaimed (treated as templated and aligned) while it equals the genome base at the corresponding position (case-insensitive; `N` never matches). Stop at the first non-matching base or the reference end. The bases left over, from that point to the read end, are **untemplated**.
 7. **5′ end.** `+`: the leftmost aligned-or-reclaimed position. `−`: the rightmost. The 5′-side untemplated bases are those beyond it (read start for `+`, read end for `−`, in read orientation).
-8. **Untemplated non-G at the 5′ side → locus unusable (5P).** If any 5′-side untemplated base is not `G` (after reverse-complementing for `−`), the locus is unusable (DL-009). Counted as `loci_untemplated_non_g`; a read with no usable locus left is counted under `discarded_untemplated_non_g`.
+8. **Untemplated non-G at the 5′ side → locus unusable (5P).** If any 5′-side untemplated base is not `G` (after reverse-complementing for `−`), the locus is unusable (DL-009; kept after G8, DL-035). Counted as `loci_untemplated_non_g`; a read with no usable locus left is counted under `discarded_untemplated_non_g`.
 9. **Untemplated bases at the 3′ side only (5P).** These are ignored; the locus stays usable (DL-010). Reads with such a locus are counted as `kept_3prime_clip_only`. Compat: the locus is unusable.
 10. **Cap signature (5P).** A usable locus is cap-positive if it has ≥ 1 untemplated 5′-side `G` (DL-008). The run length (number of untemplated G's) goes into the stats histogram (rule 26).
 11. **Minimum length.** A locus is usable only if its aligned positions (rule 5) plus reclaimed bases (rule 6) total ≥ `--min_aligned` (default 16), for unique and multimapped reads alike (DL-007). Counted as `loci_too_short`; a read with no usable locus is `discarded_too_short`. Compat: unique reads need `> 16` (reclaim-aware); multimapper loci need `≥ 16` CIGAR positions only.
@@ -126,8 +126,10 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
   - `unique`, `unique_after_filter`;
   - `multimapped_rescued`, `multimapped_naive`, `multimapped_uniform`, `multimapped_dropped`;
   - `discarded_too_short`, `discarded_untemplated_non_g`, `discarded_3prime_clip_only` (compat);
-  - `unmapped` (reads whose records are all unmapped).
-- **Loci:** `loci_too_short`, `loci_untemplated_non_g`, `loci_key_collisions` (compat).
+  - `unmapped` (reads whose records are all unmapped);
+  - `discarded_flagged` (proposed 18/10, pending approval: reads whose records are all removed by rule 2 but not all unmapped, e.g. duplicate- or QC-fail-flagged);
+  - `discarded_no_mate1` (proposed 18/10, pending approval: PE reads whose only loci lack an aligned mate 1, rule 17).
+- **Loci:** `loci_too_short`, `loci_untemplated_non_g`, `loci_no_mate1` (proposed 18/10), `loci_key_collisions` (compat).
 - **Other:** `kept_3prime_clip_only`, `nh_mismatch`.
 - **5P only:** `cap_positive_reads` (weighted sum) and `untemplated_g_run_length` histogram `{0, 1, 2, 3, ≥4}` over usable loci of unique reads. For GenXPro reads after normalisation this checks that the TSO GGG was removed.
 
@@ -176,12 +178,13 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
   - **Blocks:** rule 20's block definition and one unit test.
 - **Gaps (G):** behaviour of the original needed only for `--nanopare_compat` and the golden test. Each needs a targeted audit (nanopare-port-audit) of `readmapIO.py` before compat is implemented. Default mode doesn't depend on them.
   - **G1: closed 17/10 [V]** by a toy-SAM run of the original (`answers/17_10_2026_multimapper_rescue_audit.md` §6): sum of same-strand coverage over the footprint; ascending first pass, alternating; immediate update; zero-coverage blocks deferred; chromosome-blind integer `minpos`; block uses its last read's loci; ties follow first-seen order on Python ≥ 3.6 and the hash seed on Python 3.5 (pinned in `OPTIONS_lmod`), so golden runs need Python ≥ 3.6 or a fixed `PYTHONHASHSEED`. Not run, read from code only: tier = locus count before the length filter (l.284 vs l.593) [I].
-  - **G2:** whether a multimapper locus with a non-G untemplated 5′ base is dropped alone or discards the whole read.
+  - **G2 (mostly closed 18/10 [I]):** a multimapper locus with a non-G untemplated 5′ base is dropped alone (`proportions[i] = 0`, l.763–766); the rest are re-normalised. Still open: all loci dropped (`return` at l.771–772: read lost or retried?).
   - **G3:** whether reclaim is contiguous from the alignment edge exactly as rule 6 states, including on `N`.
   - **G4 (partly closed 17/10 [V]):** the 5′-end and coverage files **merge runs of equal value** (3 adjacent ends of 1 → one row `chr1 1000 1003 1.0`); values printed as Python `round(x, 2)` (`1.0`, `2.67`); the untemp file has a `#chrom start end G` header. Still open: zero rows, and the sort order before `bedtools sort`.
   - **G5:** BODY soft-clips (STAR Local in the collaborator's run): ignored, or reclaimed?
   - **G6:** paired-end loci with only one mate aligned.
   - **G7:** the BODY coverage merge (`bedgraph_combine.py`, l.531): strand sum or other.
+  - **G8: closed 18/10 [V]** (`answers/18_10_2026_untemplated_non_g_audit.md`). The published original discards non-G untemplated reads (`--untemp_out G` acts as a filter, `readmapIO.py` l.444–447); rule 8 matches it. The collaborator's honeybee results differ because their `endMap.sh` uses `--untemp_out A C G N T` (and STAR `Local`); the unchanged original with those flags reproduces their TG3 5P files byte-for-byte. Golden data for compat: the original re-run with the published flags on their BAMs.
 - **Implementation notes (not rules):**
   - ends and cap are kept sparse;
   - coverage is needed only where multimapper loci fall, so it can be restricted to those positions after a first pass;

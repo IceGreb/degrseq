@@ -8,10 +8,12 @@ import argparse
 import sys
 from collections.abc import Callable, Sequence
 
-from degrseq import __version__
+from degrseq import __version__, end_counts
 
 # Subcommand name (hyphenated) -> module main, e.g. "end-counts": end_counts.main
-COMMANDS: dict[str, Callable[[Sequence[str]], None]] = {}
+COMMANDS: dict[str, Callable[[Sequence[str]], None]] = {
+    "end-counts": end_counts.main,
+}
 
 
 def main(argv: Sequence[str] | None = None) -> None:
