@@ -1,6 +1,8 @@
 # degrseq
 
-Subcommands for the [rnadegradome](../nf-core-rnadegradome) Nextflow pipeline: mapping RNA
+[![CI](https://github.com/IceGreb/degrseq/actions/workflows/ci.yml/badge.svg)](https://github.com/IceGreb/degrseq/actions/workflows/ci.yml)
+
+Subcommands for the rnadegradome Nextflow pipeline (in development): mapping RNA
 5′ ends, classifying them as capped or noncapped, and detecting small-RNA-directed cleavage
 sites. Reimplements the custom logic of nanoPARE (Schon et al. 2018, Genome Res
 28:1931–1942) from behavioural specifications.

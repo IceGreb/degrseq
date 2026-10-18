@@ -1,6 +1,6 @@
 # `end-counts`: behavioural spec
 
-Status: **draft** (17/10/2026) · Replaces (nanoPARE 6264d6f): `scripts/python_scripts/readmapIO.py`, called at `endMap.sh` l.472–509; BODY coverage merge (`bedgraph_combine.py`, l.531)
+Status: **approved** (18/10/2026) · Replaces (nanoPARE 6264d6f): `scripts/python_scripts/readmapIO.py`, called at `endMap.sh` l.472–509; BODY coverage merge (`bedgraph_combine.py`, l.531)
 Pipeline module: `modules/local/end_counts/` · Design-note section: §2.5 · Decisions: `package_build/degrseq_decision_log.md` DL-007–DL-017, DL-029
 
 ## Purpose
@@ -68,15 +68,15 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 19. **Shares.** `share_i = weight_i / Σ weight_j`. A locus with weight 0 gets share 0 unless the split is equal (rule 18). Each locus receives `w × share_i` on the ends track (5′ end), cap track (if that locus is cap-positive) and coverage (its positions).
 20. **Order (D1 decided, DL-031: the original's order).**
     - **Tier** = number of loci the read has before the length filter (rule 11). Tiers are processed in ascending order.
-    - **Block** = reads of one tier with the same leftmost alignment start (integer, chromosome not included) and the same sequence (mate 1 + mate 2). A block is shared once, with `w` = the sum of its reads' weights. (Pending G1: are a block's loci those of its first read?)
+    - **Block** = reads of one tier with the same leftmost alignment start (integer, chromosome not included) and the same sequence (mate 1 + mate 2). A block is shared once, with `w` = the sum of its reads' weights. Default: reads join a block only if their locus sets are also identical (D3, DL-033). Compat: the block takes the loci of its **last** read (G1, verified 17/10).
     - **Passes:** visit blocks by leftmost start, ascending on odd passes and descending on even passes. Each placed block updates coverage before the next one is visited. A block whose loci all have weight 0 (rule 18) stays for the next pass. Repeat until a pass places nothing; then split the remaining blocks equally (rule 18).
-    - **Ties** (blocks with the same leftmost start): pending D2.
+    - **Ties** (blocks with the same leftmost start): bytewise order of the block sequence, then of the sorted locus list (chromosome, start, strand); reversed on descending passes (D2, DL-032; D3, DL-033). Compat: first-seen order in the BAM.
     - Compat: identical, plus the G1 details as audited.
 
 ### Writing
 21. **Ends track:** the per-nt sums of rules 14 and 19.
 22. **Cap track (5P):** the per-nt sums of the cap contributions, at the 5′-end coordinate (DL-008). Compat: per untemplated G, +1 unweighted for unique reads, at each G's own position (1…k nt upstream); multimappers weighted by share (#8, #26).
-23. **Rounding.** Values are rounded to `--decimals` (default 4; compat 2) with Python `round()`. Rows whose rounded value is 0 are not written. Values are printed without trailing zeros (`1`, `0.5`, `0.3333`) (DL-014). Compat format: G4.
+23. **Rounding.** Values are rounded to `--decimals` (default 4; compat 2) with Python `round()`. Rows whose rounded value is 0 are not written. Values are printed without trailing zeros (`1`, `0.5`, `0.3333`) (DL-014). Compat format: 2 decimals, Python `round()` repr (`1.0`), equal adjacent values merged into one row (G4).
 24. **Determinism.** Output is byte-identical across runs and `PYTHONHASHSEED`. Accumulation is single-threaded, in the order defined by rules 14 and 20, in float64.
 25. **Coverage files:** only with `--write_coverage` (DL-015).
 
@@ -100,7 +100,7 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 |---|---|---|---|
 | #7 | Unique reads need > 16 positions (reclaim-aware); multimapper loci ≥ 16 CIGAR-only | fix + compat (DL-007) | TG3: up to 825 more unique alignments; multimapper loci passing only through reclaim |
 | #8, #26 | Cap counted per untemplated G, +1 unweighted for uniques, at each G's position | fix + compat (DL-008) | cap moved to the 5′-end coordinate; multi-G reads count once; uniques weighted (identical when no `XW`) |
-| #24 | Loci keyed by start position only | fix + compat (DL-011) | UG3 5 % subsample: 101/282,142 reads (0.04 %) change from unique to multimapped |
+| #24 | Loci keyed by start position only | fix + compat (DL-011) | honeybee 5P sample, 5 % subsample: 101/282,142 reads (0.04 %) change from unique to multimapped |
 | — | Reads with 3′-only untemplated bases discarded | fix + compat (DL-010) | TG3: ~0.6 % of unique alignments kept |
 | — | Values rounded to 2 dp; shares < 0.005 vanish | fix + compat (DL-014) | more rows; values at 4 dp |
 | — | Multimapper order depends on BAM order and integer positions across chromosomes, in alternating passes | fix + compat (DL-012, G1) | small redistribution among multimapper loci |
@@ -152,31 +152,37 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
     - two reads in one tier at different leftmost starts: the result follows the ascending/descending pass order;
     - a zero-coverage read is placed in pass 2 after a neighbour adds coverage;
     - identical reads form one block;
+    - two blocks with the same leftmost start: same output in both BAM orders (compat: follows BAM order);
   - rule 17: paired-end 5′ end from mate 1;
   - rule 22: GGG read → cap 1 at the 5′ end (compat: 1 at each of −1, −2, −3);
   - rule 23: 1/3 → `0.3333`, 1/300 kept at 4 dp, dropped at 2 dp;
   - rule 24: byte-identical output under two `PYTHONHASHSEED` values;
   - every edge case above.
 - **Golden (compat):**
-  - ag2251's honeybee STAR BAMs and EndMap bedgraphs (`temp/<sample>.5P/star/Aligned.out.bam`, `results/EndMap/<sample>/`); a patched original reproduced them byte-for-byte on UG3 (13/10). Fixtures: an 8 MB subsample.
+  - a collaborator's honeybee 5P/BODY run (STAR BAMs and EndMap bedgraphs of the original); a patched original reproduced them byte-for-byte on one sample (13/10). Fixtures: an 8 MB subsample.
   - nanoPARE test set after Phase 5b.
   - Expected: exact match in compat mode.
 - **Default vs golden:** the difference must be explained entirely by the quirk table.
 
 ## Open
 - **D1: multimapper order: decided 17/10 (DL-031), the original's order** (rule 20). Background: `package_build/17_10_2026_end-counts_D1_multimapper_order.md`.
-- **D2: tie order between blocks with the same leftmost start** (rule 20). The original visits them in dict order: first-seen order in the BAM under Python 3. STAR with several threads may not write reads in the same order on every run [I, untested]. Options: (a) order ties by sequence, bytewise (recommended; output then doesn't depend on BAM order); (b) first-seen order in the BAM (exact parity, but output can change between STAR runs). Compat: (b).
+- **D2: tie order between blocks with the same leftmost start: decided 17/10 (DL-032), bytewise sequence order** (rule 20). The toy run showed the original's tie order is random between runs under its pinned Python 3.5.
+- **D3: identical reads whose locus sets differ: decided 18/10 (DL-033), option (a)** (rule 20). In the original, reads with the same sequence and leftmost start form one block, and the block takes the **last** read's loci. An earlier read's other loci are silently replaced (toy run: a read aligned to chr3:101/501 was counted at chr3:101/901).
+  - **When it happens:** STAR gives the same loci to the same sequence, so normally never. Per-alignment UMI dedup (pipeline, UMI G1) can remove a read at one locus but not another, so it can happen after dedup [I].
+  - **Options:**
+    - (a) a block requires the same sequence **and** the same locus set (recommended). Identical to the original whenever loci agree, which is the normal case; otherwise no read is moved to loci it never aligned to;
+    - (b) reproduce the original (last read's loci).
+  - Compat: (b) either way.
+  - **Blocks:** rule 20's block definition and one unit test.
 - **Gaps (G):** behaviour of the original needed only for `--nanopare_compat` and the golden test. Each needs a targeted audit (nanopare-port-audit) of `readmapIO.py` before compat is implemented. Default mode doesn't depend on them.
-  - **G1 (now also needed by the default, DL-031):** rescue in the original (mostly answered by `answers/17_10_2026_multimapper_rescue_audit.md` [I]: sum of same-strand coverage; tiers by locus count; within a tier sequential by integer `minpos`, alternating direction, zero-coverage reads deferred, identical reads as one block; toy-BAM confirmation pending; also: which Python ran `readmapIO.py` (`endMap.sh` calls bare `python`; dict order differs under Python 2), and whether a block's loci are taken from its first read):
-    - coverage measure per locus (sum, mean or something else);
-    - visiting order (tiers, the identical-sequence blocks, alternating passes until stable, integer positions across chromosomes) (l.556–958).
+  - **G1: closed 17/10 [V]** by a toy-SAM run of the original (`answers/17_10_2026_multimapper_rescue_audit.md` §6): sum of same-strand coverage over the footprint; ascending first pass, alternating; immediate update; zero-coverage blocks deferred; chromosome-blind integer `minpos`; block uses its last read's loci; ties follow first-seen order on Python ≥ 3.6 and the hash seed on Python 3.5 (pinned in `OPTIONS_lmod`), so golden runs need Python ≥ 3.6 or a fixed `PYTHONHASHSEED`. Not run, read from code only: tier = locus count before the length filter (l.284 vs l.593) [I].
   - **G2:** whether a multimapper locus with a non-G untemplated 5′ base is dropped alone or discards the whole read.
   - **G3:** whether reclaim is contiguous from the alignment edge exactly as rule 6 states, including on `N`.
-  - **G4:** row format of `write_bedgraph_from_dict` (l.960–987): merged runs or per nt, the rounding method, zero rows, sort order before `bedtools sort`.
-  - **G5:** BODY soft-clips (STAR Local in ag2251's run): ignored, or reclaimed?
+  - **G4 (partly closed 17/10 [V]):** the 5′-end and coverage files **merge runs of equal value** (3 adjacent ends of 1 → one row `chr1 1000 1003 1.0`); values printed as Python `round(x, 2)` (`1.0`, `2.67`); the untemp file has a `#chrom start end G` header. Still open: zero rows, and the sort order before `bedtools sort`.
+  - **G5:** BODY soft-clips (STAR Local in the collaborator's run): ignored, or reclaimed?
   - **G6:** paired-end loci with only one mate aligned.
   - **G7:** the BODY coverage merge (`bedgraph_combine.py`, l.531): strand sum or other.
 - **Implementation notes (not rules):**
   - ends and cap are kept sparse;
   - coverage is needed only where multimapper loci fall, so it can be restricted to those positions after a first pass;
-  - multimapper records are held in memory until uniques are done (≈ 38 % of honeybee 5P reads).
+  - multimapper records are held in memory until uniques are done (a large fraction of 5P reads in typical runs).
