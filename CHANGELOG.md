@@ -25,3 +25,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Values at 4 decimals, one row per nucleotide (no merged runs).
 - Ties between multimapper blocks broken by sequence, then locus list; identical reads
   with different locus sets are shared separately.
+- Multimapped reads: alignments with a non-G extra 5′ base are removed before the read is
+  shared, so a read with one usable alignment is never lost. The original computes the shares
+  first and can drop such reads silently.
+- Cap signal comes only from reads that are counted, and only from the 5′ clip. The original
+  also adds it for reads too short to be counted, and for G's in a 3′ clip.

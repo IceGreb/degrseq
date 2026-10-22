@@ -104,6 +104,10 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 | — | Reads with 3′-only untemplated bases discarded | fix + compat (DL-010) | TG3: ~0.6 % of unique alignments kept |
 | — | Values rounded to 2 dp; shares < 0.005 vanish | fix + compat (DL-014) | more rows; values at 4 dp |
 | — | Multimapper order depends on BAM order and integer positions across chromosomes, in alternating passes | fix + compat (DL-012, G1) | small redistribution among multimapper loci |
+| — | Multimapper shares are computed from coverage before non-G loci are dropped; if all loci with coverage are dropped, the read is lost silently (G2) | fix + compat (DL-039) | reads with a usable locus that had no coverage are kept instead of lost (toy: 1 of 4); candidates: TG3 2,710 / 100,264 multimapped reads, test flower_1 196 / 2,271 |
+| — | Reads clipped at both ends are discarded if the 3′ clip has any non-G base, even when the 5′ clip is all G | fix + compat (D5 pending) | TG3: 4.46 % of unique reads kept (as cap-positive); test flower_1: 0.19 % |
+| #33 | Untemplated G's are added to the cap track before the length check (l.449–453 vs l.460): reads too short to be counted still add cap signal | fix + compat | test flower_1: 2,255 too-short unique reads with an all-G 5′ clip add cap signal only in the original; honeybee TG3: 787 |
+| #34 | A read clipped at both ends with G's on both sides passes the check, and the 3′ G's go into the cap track at the read's 3′ end (l.449–453) | fix + compat | TG3: 1,457 unique reads; test flower_1: 5 |
 | #25 | Splice-junction tally uses a stale chromosome | not ported (option unused, DL-015) | — |
 | #9 | PE 5P aligned end-to-end | pipeline (STAR args), not here | — |
 
@@ -125,11 +129,12 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
 - **Read fates** (they sum to `reads_total`):
   - `unique`, `unique_after_filter`;
   - `multimapped_rescued`, `multimapped_naive`, `multimapped_uniform`, `multimapped_dropped`;
+  - `multimapped_lost_compat` (compat only, DL-039): reads the original loses because all its loci with coverage were non-G (G2);
   - `discarded_too_short`, `discarded_untemplated_non_g`, `discarded_3prime_clip_only` (compat);
   - `unmapped` (reads whose records are all unmapped);
-  - `discarded_flagged` (proposed 18/10, pending approval: reads whose records are all removed by rule 2 but not all unmapped, e.g. duplicate- or QC-fail-flagged);
-  - `discarded_no_mate1` (proposed 18/10, pending approval: PE reads whose only loci lack an aligned mate 1, rule 17).
-- **Loci:** `loci_too_short`, `loci_untemplated_non_g`, `loci_no_mate1` (proposed 18/10), `loci_key_collisions` (compat).
+  - `discarded_flagged` (approved 21/10, DL-037: reads whose records are all removed by rule 2 but not all unmapped, e.g. duplicate- or QC-fail-flagged);
+  - `discarded_no_mate1` (approved 21/10, DL-037: PE reads whose only loci lack an aligned mate 1, rule 17).
+- **Loci:** `loci_too_short`, `loci_untemplated_non_g`, `loci_no_mate1` (approved 21/10), `loci_key_collisions` (compat).
 - **Other:** `kept_3prime_clip_only`, `nh_mismatch`.
 - **5P only:** `cap_positive_reads` (weighted sum) and `untemplated_g_run_length` histogram `{0, 1, 2, 3, ≥4}` over usable loci of unique reads. For GenXPro reads after normalisation this checks that the TSO GGG was removed.
 
@@ -159,6 +164,8 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
   - rule 22: GGG read → cap 1 at the 5′ end (compat: 1 at each of −1, −2, −3);
   - rule 23: 1/3 → `0.3333`, 1/300 kept at 4 dp, dropped at 2 dp;
   - rule 24: byte-identical output under two `PYTHONHASHSEED` values;
+  - both-end clip: `GG` 5′ clip + `AA` 3′ clip → kept, cap-positive (compat: discarded);
+  - G2 toy cases: both loci non-G → discarded; usable locus without coverage + non-G locus with coverage → unique (compat: lost); no coverage anywhere → usable locus;
   - every edge case above.
 - **Golden (compat):**
   - a collaborator's honeybee 5P/BODY run (STAR BAMs and EndMap bedgraphs of the original); a patched original reproduced them byte-for-byte on one sample (13/10). Fixtures: an 8 MB subsample.
@@ -176,10 +183,17 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
     - (b) reproduce the original (last read's loci).
   - Compat: (b) either way.
   - **Blocks:** rule 20's block definition and one unit test.
+- **D4 (open):** reproduce the unreachable take-back quirks (case, `N`, walk order, chromosome edge) in compat, or not. Recommended: not; none occurs with STAR output (G3).
+- **D5 (open):** reads clipped at both ends with an all-G 5′ clip and a non-G 3′ clip: keep (recommended; same reasoning as rule 9: the 3′ end says nothing about the 5′ end or the cap) or discard as the original.
 - **Gaps (G):** behaviour of the original needed only for `--nanopare_compat` and the golden test. Each needs a targeted audit (nanopare-port-audit) of `readmapIO.py` before compat is implemented. Default mode doesn't depend on them.
   - **G1: closed 17/10 [V]** by a toy-SAM run of the original (`answers/17_10_2026_multimapper_rescue_audit.md` §6): sum of same-strand coverage over the footprint; ascending first pass, alternating; immediate update; zero-coverage blocks deferred; chromosome-blind integer `minpos`; block uses its last read's loci; ties follow first-seen order on Python ≥ 3.6 and the hash seed on Python 3.5 (pinned in `OPTIONS_lmod`), so golden runs need Python ≥ 3.6 or a fixed `PYTHONHASHSEED`. Not run, read from code only: tier = locus count before the length filter (l.284 vs l.593) [I].
-  - **G2 (mostly closed 18/10 [I]):** a multimapper locus with a non-G untemplated 5′ base is dropped alone (`proportions[i] = 0`, l.763–766); the rest are re-normalised. Still open: all loci dropped (`return` at l.771–772: read lost or retried?).
-  - **G3:** whether reclaim is contiguous from the alignment edge exactly as rule 6 states, including on `N`.
+  - **G2: closed 22/10 [V]** (toy SAM, `nanopare_nfcore_design/answers/22_10_2026_end-counts_g2_g3.md`). The original computes each locus's share from coverage **before** it drops loci with a non-G untemplated 5′ base (l.606–633, then l.763–766). If every locus with coverage is dropped, the read is lost (`return`, l.770–772) and never retried, even when a usable locus remains; the run log still counts it as rescued. A read whose usable loci all lack coverage is deferred to the equal-split pass and lands on its usable locus. Default mode drops unusable loci first (rule 8), so a read with one usable locus is a unique read. Compat: reproduce the loss and count it as `multimapped_lost_compat` (decided 22/10, DL-039).
+  - **G3: closed 22/10 [V]** (toy SAMs + both STAR BAMs, `nanopare_nfcore_design/answers/22_10_2026_end-counts_g2_g3.md`). How the original takes back clipped bases (l.382–419):
+    - it compares case-sensitively (the genome is loaded as is, `fasta_utils.import_genome`), so lowercase genome bases never match; `N` in the read matches `N` in the genome;
+    - for a read clipped at both ends, both clips are walked in descending position order, so one of them is walked from its outer end and is never taken back beyond its innermost base;
+    - clipped bases beyond the chromosome start/end are skipped (neither taken back nor untemplated); a 5′ end at chromosome position 1 is then missing from the ends file, though coverage is written.
+    - **None of this is reachable with STAR output:** on TG3 5P (430,097 primary records with a 5′ clip) and test flower_1 (32,340), no clipped base adjacent to the alignment ever matches the genome, so nothing is ever taken back. Not reproduced in compat (decision pending, D4).
+  - **Reads clipped at both ends (found with G3) [V]:** the original's untemplated check (l.444–447) includes the 3′ clip, so a read with an all-G 5′ clip and any non-G 3′ base is discarded. Default keeps it (rules 8–9): TG3 4.46 % of unique reads, test flower_1 0.19 %. Compat: discard (quirk table). Decision pending (D5).
   - **G4 (partly closed 17/10 [V]):** the 5′-end and coverage files **merge runs of equal value** (3 adjacent ends of 1 → one row `chr1 1000 1003 1.0`); values printed as Python `round(x, 2)` (`1.0`, `2.67`); the untemp file has a `#chrom start end G` header. Still open: zero rows, and the sort order before `bedtools sort`.
   - **G5:** BODY soft-clips (STAR Local in the collaborator's run): ignored, or reclaimed?
   - **G6:** paired-end loci with only one mate aligned.
