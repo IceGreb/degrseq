@@ -10,5 +10,5 @@ dist/
 .coverage
 htmlcov/
 # local golden-output runs and scratch
-golden/
-scratch/
+/golden/
+/scratch/

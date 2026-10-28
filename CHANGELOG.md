@@ -14,13 +14,28 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   TestPyPI via trusted publishing.
 - `end-counts` (default mode; `--nanopare_compat` not yet implemented): per-nucleotide 5′ ends,
   cap track (5P), optional coverage, stats JSON. Implements `specs/end-counts.md`.
+- `end-counts` golden fixture (`tests/fixtures/end_counts_golden/`): nanoPARE test-set subsample and the
+  original's outputs on it. Pre-commit whitespace hooks skip `tests/fixtures/` so fixtures stay byte-exact;
+  `.gitignore` ignores `golden/` and `scratch/` only at the repo root, so fixture folders are tracked.
 
 ### Differences from nanoPARE (`end-counts`, see the spec's quirk table)
 
 - Cap counted once per read at its 5′ end, weighted, instead of per untemplated G upstream.
 - Same minimum length (`--min_aligned`, default 16) for unique and multimapped reads,
   reclaimed bases included.
-- Reads with untemplated bases only at the 3′ side are kept.
+- Clipped bases are taken back from the alignment edge outwards on both ends, ignoring genome
+  case; `N` never matches; bases past a chromosome end count as untemplated. None of these
+  differs from nanoPARE on STAR output (no clipped base next to an alignment matches the genome).
+- BODY multimapped reads are grouped by sequence and locus set; nanoPARE groups them by CIGAR
+  and counts every read of a group at the last read's loci (21–26 % of BODY multimapped reads in
+  the nanoPARE test set). `--nanopare_compat` will reproduce it.
+- Paired-end: the 5′ end always comes from mate 1, and a non-G clip on mate 1 discards the read.
+  nanoPARE takes the outermost position over both mates and keeps mate 2; this can't occur with
+  its published STAR settings and is not reproduced in `--nanopare_compat`.
+- Bedgraphs: no `0.0` rows in the cap track; a 5′ end at chromosome position 0 is kept; BODY
+  coverage sums unrounded strand values.
+- Only the 5′ clip is examined: reads with untemplated bases at the 3′ side (alone or together
+  with a 5′ clip) are kept, and 3′ bases never count as cap signal. The original drops them.
 - Loci keyed by (reference, strand, 5′ end), not start position only.
 - Values at 4 decimals, one row per nucleotide (no merged runs).
 - Ties between multimapper blocks broken by sequence, then locus list; identical reads

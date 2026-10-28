@@ -1,0 +1,14 @@
+/home/nv358/rds/nanoPARE/scripts/python_scripts/readmapIO.py:1103: SyntaxWarning: invalid escape sequence '\d'
+  cigar_elements = zip(re.findall('[A-Z]+',cigar),[int(i) for i in re.findall('\d+',cigar)])
+/home/nv358/rds/nanoPARE/scripts/python_scripts/readmapIO.py:1145: SyntaxWarning: invalid escape sequence '\d'
+  cigar_elements = zip(re.findall('[A-Z]+',cigar),[int(i) for i in re.findall('\d+',cigar)])
+Loading genome FASTA file...
+Loading chromosome lengths from header: /tmp/claude-47606/-home-nv358-rds/adcc2d24-3524-4c48-b93c-704c6272d49a/scratchpad/fixture_work2/flower_1.5P.sam
+Constructing coverage dictionaries...
+
+Assigning 3590 multimappers: 5P
+	Rescued 94.1% of multimappers.
+All reads assigned. Writing files...
+	5P +
+	5P -
+Coverage calculations complete!

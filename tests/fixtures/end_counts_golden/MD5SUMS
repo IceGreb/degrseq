@@ -1,0 +1,11 @@
+a42f817667423c25e8f6e6de44da68c9  input/flower_1.5P.bam
+1580021b827233f09a47ceb2df3dd715  input/flower_1.BODY.bam
+cef4d094220ef4075c95e9b28d843392  input/genome.fasta
+13e1bb7734e082bbab5ebba39a685d19  input/genome.fasta.fai
+6a7c7732335b00c5784c5c249f249c61  golden/flower_1.5P.minus.bedgraph
+7065caf6012d6daaf454668e97f6e35b  golden/flower_1.5P.plus.bedgraph
+bfd8b79894a43b8f211b5d3bfa0f6e8f  golden/flower_1.BODY.cov.bedgraph
+6c705f903f7311c3c83d1731622f042f  golden/flower_1.BODY.minus.bedgraph
+a620fc6c5b9b75a6d07747a4679c9bc0  golden/flower_1.BODY.plus.bedgraph
+c1a62761e25d212a2b47bd616c08a8b8  golden/flower_1.uG.minus.bedgraph
+253b598b825802c081aec458372b120c  golden/flower_1.uG.plus.bedgraph
