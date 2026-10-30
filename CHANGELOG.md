@@ -28,6 +28,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - `srna-shuffle`: shuffled sRNA sets for the cleavage null model (`--n_shuffles`, `--seed`,
   `--layout combined|per_set`), stats JSON. Implements `specs/srna-shuffle.md`.
 
+- `cleavage-stats`: significant sRNA cleavage sites from real vs shuffled-sRNA step-1 tables
+  (empirical p-values, Fisher, BH, window join), `--nanopare_compat`, stats JSON.
+  Implements `specs/cleavage-stats.md`.
+
 ### Differences from nanoPARE (`srna-shuffle`)
 
 - Seeded (`--seed`, default 0): the same input and seed give identical output. The original was
@@ -64,3 +68,22 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   first and can drop such reads silently.
 - Cap signal comes only from reads that are counted, and only from the 5′ clip. The original
   also adds it for reads too short to be counted, and for G's in a 3′ clip.
+
+### Differences from nanoPARE (`cleavage-stats`)
+- Inputs are arguments, not fixed `Ath_annotations/` paths; class and family can come from
+  `--srna_table` (name rule as fallback); unclassified sRNAs are skipped with a warning.
+- Shuffled sites come as one pooled table per window (DL-050), so any number of sets works.
+- An sRNA with no shuffled sites gets p = 1 and a warning; the original stops with an error.
+- An sRNA may have several precursors (self:self removal checks all); the original stops on
+  duplicate rows. sRNAs with real sites missing from `--srna_table` are counted and warned.
+- A site found only in W50, or a window without sites, no longer stops the run (Q10).
+- Labels: a site found in one window keeps its common name; `verified.` is `yes` if either
+  window says yes; `interaction` uses the reported sRNA. Compat keeps R's `min()` and the
+  W20 sRNA (Q3, Q9).
+- Output order breaks adj-p ties by fold change, sRNA, transcript and site; compat keeps R's
+  order (by `Transcript_Slice.site` text, then adj p).
+- New `significant_sites.tsv` per class. Per-sRNA ECDF PDFs are not written; plotting is left to the pipeline from the
+  tables.
+- p-values are kept as the original (no +1; DL-051).
+- adj p can differ from R in the 15th significant digit (scipy vs R chi-square tail).
+
