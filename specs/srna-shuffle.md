@@ -1,6 +1,6 @@
 # `srna-shuffle`: behavioural spec
 
-Status: draft (13/10/2026) · Replaces (nanoPARE 6264d6f): `EndCut.pipeline/scripts/sRNA_shuffler.py`
+Status: **approved** (30/10/2026, DL-049); implemented 30/10 · Replaces (nanoPARE 6264d6f): `EndCut.pipeline/scripts/sRNA_shuffler.py`
 Pipeline module: `modules/local/srna_shuffle/` · Design-note section: §6 EndCut
 
 ## Purpose
@@ -21,7 +21,7 @@ specifically.
 ## Outputs
 | File | Format | Consumer |
 |---|---|---|
-| `<prefix>.shuffled.fa` (default layout `combined`) | All N sets in one FASTA, set-major (set 0 for every sRNA in input order, then set 1, …). Header `><id>_shuffled_<j>` | GSTAr (chunked by the pipeline), then the pred-sites conversion, which strips `_shuffled…` but must keep `j` as a column |
+| `<prefix>.shuffled.fa` (default layout `combined`) | All N sets in one FASTA, set-major (set 0 for every sRNA in input order, then set 1, …). Header `><id>_shuffled_<j>` | GSTAr (chunked by the pipeline), then the pred-sites conversion, which strips `_shuffled_<j>` (DL-050: all sets processed together; `cleavage-stats` pools them) |
 | `<prefix>.<j>.shuffled.fa` × N (layout `per_set`) | One file per set, as in the original (`<stem>.<j>.shuffled.fa`) | For compat / golden-style runs |
 | `<prefix>.srna-shuffle.stats.json` | see Stats | MultiQC |
 
@@ -63,16 +63,16 @@ No `--nanopare_compat` mode: an unseeded shuffle can't be reproduced, so there i
 | `--fasta` | — | argv[1] |
 | `--n_shuffles` | 1000 | argv[2] |
 | `--seed` | 0 | — |
-| `--layout` | `combined` | `per_set` behaviour |
+| `--layout` | `combined` (DL-049) | `per_set` behaviour |
 | `--prefix` | input stem | split at `.fa` |
 
 ## Stats file
 `schema_version`, `n_srnas`, `n_shuffles`, `seed`, `n_identical_to_input` (count of shuffles equal to their input; useful for short or low-complexity sRNAs).
 
 ## Tests
-- Unit: composition and length preserved for every record; header format; input order and set-major order; same seed → identical bytes in both layouts; different seeds → different output; multi-line FASTA; description in header; duplicate IDs and empty sequence raise; `n_identical_to_input` counted.
-- Golden: none byte-level (Q1). Statistical check: on the bundled `anno.mir.tas.fa`, per-position nucleotide frequencies of shuffled sets match those of the input pooled over each sRNA (χ² test, informational only).
-- Downstream compatibility: GSTAr runs on a combined-layout chunk, and the pred-sites conversion recovers sRNA name and set `j` for every hit.
+- Unit: composition and length preserved for every record; all 24 orders of `ACGT` equally likely (χ², fixed seed, p > 0.001; catches biased shuffles); header format; input order and set-major order; same seed → identical bytes in both layouts; different seeds → different output; multi-line FASTA; description in header; duplicate IDs and empty sequence raise; `n_identical_to_input` counted.
+- Golden: none byte-level (Q1). **Done 30/10** (`nanopare_nfcore_design/package_build/30_10_2026_srna-shuffle_vs_original.md`): no difference from the original's 1,000 sets. Statistical check: on the bundled `anno.mir.tas.fa`, per-position nucleotide frequencies of shuffled sets match those of the input pooled over each sRNA (χ² test, informational only).
+- Downstream compatibility: GSTAr runs on a combined-layout chunk, and the pred-sites conversion recovers sRNA name and set `j` for every hit. **Done 30/10** (same note): a chunk across a set boundary gives the same GSTAr rows as per-set files; names and `j` recovered for every site. The pipeline drops `j`, as the original (DL-050).
 
 ## Open
-- Whether the pipeline chunks the combined FASTA for GSTAr (design proposal) or keeps per-set files. That only affects `--layout`'s default.
+- Whether the pipeline chunks the combined FASTA for GSTAr or keeps per-set files. Default set to `combined` 30/10 (DL-049); revisit when the Phase 4 GSTAr process is built. Only the default changes.

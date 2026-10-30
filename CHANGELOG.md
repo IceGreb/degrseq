@@ -25,6 +25,18 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   original's outputs on it. Pre-commit whitespace hooks skip `tests/fixtures/` so fixtures stay byte-exact;
   `.gitignore` ignores `golden/` and `scratch/` only at the repo root, so fixture folders are tracked.
 
+- `srna-shuffle`: shuffled sRNA sets for the cleavage null model (`--n_shuffles`, `--seed`,
+  `--layout combined|per_set`), stats JSON. Implements `specs/srna-shuffle.md`.
+
+### Differences from nanoPARE (`srna-shuffle`)
+
+- Seeded (`--seed`, default 0): the same input and seed give identical output. The original was
+  unseeded. Shuffles are statistically indistinguishable from the original's.
+- Default output is one combined FASTA (`<prefix>.shuffled.fa`); `--layout per_set` writes one
+  file per set, as the original.
+- Multi-line FASTA accepted; header descriptions dropped from IDs; duplicate IDs and empty
+  sequences are errors.
+
 ### Differences from nanoPARE (`end-counts`, see the spec's quirk table)
 
 - Cap counted once per read at its 5′ end, weighted, instead of per untemplated G upstream.
