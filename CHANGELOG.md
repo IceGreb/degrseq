@@ -82,8 +82,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   W20 sRNA (Q3, Q9).
 - Output order breaks adj-p ties by fold change, sRNA, transcript and site; compat keeps R's
   order (by `Transcript_Slice.site` text, then adj p).
-- New `significant_sites.tsv` per class. Per-sRNA ECDF PDFs are not written; plotting is left to the pipeline from the
-  tables.
+- New per class: `significant_sites.tsv`, `window_tests.tsv` (every tested site per window with
+  its p-values) and `shuffled_values.tsv` (the shuffled values behind them). Per-sRNA ECDF PDFs
+  are not written; plotting is left to the pipeline, from these tables (DL-054, DL-055).
+- A validated target also matches by its own sRNA name, so explicit families work
+  (`miR2934` validates `miR2934-3p`); no change with the name rule alone.
 - p-values are kept as the original (no +1; DL-051).
 - adj p can differ from R in the 15th significant digit (scipy vs R chi-square tail).
-

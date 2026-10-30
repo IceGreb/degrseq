@@ -25,6 +25,8 @@ and filtered. This is the step that outputs cleavage sites, the pipeline's end g
 |---|---|---|
 | `<prefix>.<class>.detected_sites.tsv` | One row per site; header as the original writes it: target.transcript, sRNA, slice.site, Allen.score, slice.site.rpm, fold.change, verified. (R renames `verified?`), common.name, interaction, adj.p.val. Sorted by rule 12; numbers as rule 14. `<class>` = `miRNA` / `tasiRNA`; always written, header only if no sites | user / report |
 | `<prefix>.<class>.significant_sites.tsv` | Rows of `detected_sites.tsv` passing rule 9 on the reported values; same columns and order. New (the original computes but doesn't write them) | user / report |
+| `<prefix>.<class>.window_tests.tsv` | Rule 15: every tested real site per window: window, sRNA, Transcript, Slice.site, AllenScore, flankMax.rpm, slice.site.rpm, fold.change, n_shuffled, fc.p.val, allen.p.val, fishers.combined.p.val, fishers.combined.p.val.adj | pipeline plots / user |
+| `<prefix>.<class>.shuffled_values.tsv` | Rule 15: the shuffled rows behind those p-values: window, sRNA, fold.change, AllenScore | pipeline plots / user |
 | `<prefix>.cleavage-stats.stats.json` | see Stats | MultiQC |
 
 ## Rules (per sRNA class, per window W ∈ {20, 50})
@@ -53,6 +55,7 @@ and filtered. This is the step that outputs cleavage sites, the pipeline's end g
 12. **Output order:** adj p ↑, fc ↓, sRNA ↑, Transcript ↑, Slice.site ↑ (G3). Compat: sites ordered by the text `Transcript_Slice.site` (byte order; R `merge` sorts on it), then a stable sort on adj p.
 13. **Class and family (D1):** from `--srna_table` where given; otherwise `miR…` → miRNA, family = first 6 characters; `TAS…` → tasiRNA, family = first 4. Anything else is unclassified: skipped, warned, counted. A class other than `miRNA` / `tasiRNA`, or a duplicate sRNA, is an error.
 14. **Numbers** are written as R's `write.table` does: up to 15 significant digits, and per value scientific notation (`1e-04`) when it is shorter than fixed notation. Integers (slice site) as is.
+15. **Test details (DL-055):** `window_tests.tsv` lists every real site after rule 4, per window (W20 then W50; sRNA, Transcript, Slice.site ↑), with the values and p-values of rules 1 and 6–8 (an empty null: n_shuffled 0, all p = 1). `shuffled_values.tsv` lists, per window (W20 then W50) and sRNA (↑), the shuffled rows of every sRNA in that table, in input order. Together they hold everything the original's per-sRNA ECDF plots show.
 
 ## Edge cases
 - An sRNA with real sites but no shuffled sites → `F` undefined (R `ecdf` errors on empty input, aborting the whole script). **Decided (D3):** p = 1, warning, listed in stats `srnas_empty_null`.
@@ -67,7 +70,7 @@ and filtered. This is the step that outputs cleavage sites, the pipeline's end g
 | Q2 | Arabidopsis-specific inputs and paths are hard-coded (`Ath_annotations/…`, TAIR aliases) | **fix**: all optional arguments | — |
 | Q3 | `print.tables` takes `min()` of the two `verified?` strings and the two `common.name` strings (lexicographic), and calls `min(…, na.rm=TRUE)` with the `na.rm` misplaced on `common.name` | **fix + compat (D2)**: default = non-missing value ("yes" if either window says yes); compat reproduces `min()`. [V] 15/10: `min("ARF17", NA)` = `NA` in R 4.5.3, so a site detected in only one window loses its `common.name` (l.336) | labels only; calls unchanged |
 | Q4 | The two windows are run with a hard-coded 1,000 shuffles (`get.tars`), and `shuff.num` is not taken from the data | **moot (DL-050)**: one pooled table, no set number; any number of sets works | none |
-| Q5 | Per-sRNA ECDF PDFs are always written | **dropped from the package (D4, 30/10)**: plots are left to the pipeline, drawn from the output tables (the per-sRNA ECDFs would also need the shuffled values, which are not written) | no PDFs |
+| Q5 | Per-sRNA ECDF PDFs are always written | **dropped from the package (D4, 30/10)**: plots are left to the pipeline, drawn from the output tables; `window_tests.tsv` + `shuffled_values.tsv` hold what the ECDF plots need (rule 15, DL-055) | no PDFs; two extra tables |
 | Q7 | An sRNA with an empty null aborts the whole script | **fix (D3)**: p = 1 + warning | runs that crashed now complete |
 | Q8 | Output sorted by adj p only (stable on input order) | **fix + compat (G3)**: full tie-break (rule 12) | row order among ties |
 | Q6 | The p = 0 Fisher case (rule 7) | must match | G2 |
@@ -100,4 +103,4 @@ and filtered. This is the step that outputs cleavage sites, the pipeline's end g
 - **adj p precision (30/10, DL-052):** compat matches the original's adj p to the 15th significant digit at worst (5 of 41 golden values differ in that digit; scipy vs R chi-square tail). Not a concern; the golden test uses a relative tolerance of 1e-12.
 - Golden p-values: resolved by the golden run (29/10), which regenerated the 1,000 shuffled tables. The authors' own tables (Q3, DL-023) are no longer needed.
 - **Both windows hold the same sites (checked 30/10):** EndCut step 1 builds the W20 and W50 tables from the same predicted sites; only flankMax.rpm (so fc) differs. On the golden run the real tables of all 3 samples have identical rows apart from that column. So with pipeline input, rule 4 keeps the same sRNA per site in both windows, and Q9, Q10 and the one-window or disagreeing-label cases of rule 11 (D2/Q3) can't occur; they guard against tables from different runs. What does matter: which window is reported (rule 10, ties → W20) and the output order (rule 12).
-- **D4 revised 30/10 (DL-054):** the package writes tables only; any plots belong to the pipeline. No matplotlib extra.
+- **D4 revised 30/10 (DL-054, DL-055):** the package writes tables only; any plots belong to the pipeline. No matplotlib extra. The shuffled values and per-window p-values are written (rule 15) so nothing the original plotted is lost.

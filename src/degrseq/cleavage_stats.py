@@ -51,6 +51,11 @@ class Site:
     allen: float
     rpm: float
     fc: float
+    flank: float = 0.0
+    n_null: int = 0
+    p_fc: float = 1.0
+    p_allen: float = 1.0
+    p: float = 1.0
     adj: float = 1.0
 
     @property
@@ -160,20 +165,28 @@ def read_sites(path: str) -> list[Site]:
                 f"{path}: Slice.site {row['Slice.site']!r} is not an integer"
             ) from None
         sites.append(
-            Site(row["sRNA"], row["Transcript"], slice_site, allen, rpm, fold_change(rpm, flank))
+            Site(
+                row["sRNA"],
+                row["Transcript"],
+                slice_site,
+                allen,
+                rpm,
+                fold_change(rpm, flank),
+                flank,
+            )
         )
     return sites
 
 
 def read_null(path: str) -> Null:
-    """Rule 5: pooled shuffled rows as sorted fc and Allen arrays per sRNA."""
+    """Rule 5: pooled shuffled rows as fc and Allen arrays per sRNA, in input order."""
     values: dict[str, tuple[list[float], list[float]]] = defaultdict(lambda: ([], []))
     for row in iter_tsv(path, SITE_COLUMNS):
         allen, flank, rpm = (number(row[c], path, c, True) for c in SITE_COLUMNS[3:])
         fcs, allens = values[row["sRNA"]]
         fcs.append(fold_change(rpm, flank))
         allens.append(allen or 0.0)
-    return {k: (np.sort(f), np.sort(a)) for k, (f, a) in values.items()}
+    return {k: (np.array(f), np.array(a)) for k, (f, a) in values.items()}
 
 
 def read_annotation(args: argparse.Namespace) -> tuple[Annotation, list[str]]:
@@ -238,19 +251,21 @@ def bh(p: np.ndarray) -> np.ndarray:
 
 def window_pvalues(real: list[Site], null: Null, empty_null: set[str]) -> list[Site]:
     """Rules 6 to 8."""
-    p = np.empty(len(real))
-    for i, site in enumerate(real):
+    sorted_null: Null = {}
+    for site in real:
         if site.srna not in null:
             empty_null.add(site.srna)
-            p[i] = 1.0
             continue
-        fcs, allens = null[site.srna]
-        p_fc = 1 - np.searchsorted(fcs, site.fc, side="right") / fcs.size
-        p_allen = np.searchsorted(allens, site.allen, side="right") / allens.size
+        if site.srna not in sorted_null:
+            sorted_null[site.srna] = tuple(np.sort(v) for v in null[site.srna])
+        fcs, allens = sorted_null[site.srna]
+        site.n_null = fcs.size
+        site.p_fc = float(1 - np.searchsorted(fcs, site.fc, side="right") / fcs.size)
+        site.p_allen = float(np.searchsorted(allens, site.allen, side="right") / allens.size)
         with np.errstate(divide="ignore"):
-            statistic = -2 * (np.log(p_fc) + np.log(p_allen))
-        p[i] = chi2.sf(statistic, 4)
-    for site, adj in zip(real, bh(p), strict=True):
+            statistic = -2 * (np.log(site.p_fc) + np.log(site.p_allen))
+        site.p = float(chi2.sf(statistic, 4))
+    for site, adj in zip(real, bh(np.array([s.p for s in real])), strict=True):
         site.adj = float(adj)
     return real
 
@@ -317,6 +332,33 @@ def write_table(path: str, rows: list[tuple]) -> None:
         out.writelines(format_row(r) for r in rows)
 
 
+WINDOW_HEADER = ("window", "sRNA", "Transcript", "Slice.site", "AllenScore", "flankMax.rpm",
+                 "slice.site.rpm", "fold.change", "n_shuffled", "fc.p.val", "allen.p.val",
+                 "fishers.combined.p.val", "fishers.combined.p.val.adj")  # fmt: skip
+SHUFFLED_HEADER = ("window", "sRNA", "fold.change", "AllenScore")
+
+
+def write_window_tests(path: str, by_window: dict[int, list[Site]]) -> None:
+    """Rule 15: every tested real site per window, with its p-values."""
+    with open(path, "w") as out:
+        out.write("\t".join(WINDOW_HEADER) + "\n")
+        for w in WINDOWS:
+            for s in sorted(by_window[w], key=lambda s: (s.srna, s.transcript, s.slice_site)):
+                numbers = (s.allen, s.flank, s.rpm, s.fc)
+                tail = (s.p_fc, s.p_allen, s.p, s.adj)
+                fields = [str(w), s.srna, s.transcript, str(s.slice_site),
+                          *map(r_number, numbers), str(s.n_null), *map(r_number, tail)]  # fmt: skip
+                out.write("\t".join(fields) + "\n")
+
+
+def write_shuffled_values(path: str, rows: list[tuple[int, str, float, float]]) -> None:
+    """Rule 15: the shuffled values behind each tested sRNA's p-values."""
+    with open(path, "w") as out:
+        out.write("\t".join(SHUFFLED_HEADER) + "\n")
+        for w, srna, fc, allen in rows:
+            out.write(f"{w}\t{srna}\t{r_number(fc)}\t{r_number(allen)}\n")
+
+
 def significant(row: tuple, args: argparse.Namespace) -> bool:
     """Rule 9."""
     return row[5] > args.fc_min and row[9] < args.padj_max and row[4] > args.rpm_min
@@ -332,6 +374,7 @@ def run(args: argparse.Namespace) -> dict:
     empty_null: set[str] = set()
     not_in_table: set[str] = set()
     by_window: dict[str, dict[int, list[Site]]] = {cls: {} for cls in CLASSES}
+    shuffled_rows: dict[str, list[tuple[int, str, float, float]]] = {cls: [] for cls in CLASSES}
     window_stats: dict[str, dict[str, dict]] = {cls: {} for cls in CLASSES}
     for w in WINDOWS:
         real = read_sites(getattr(args, f"real_sites_w{w}"))
@@ -342,6 +385,11 @@ def run(args: argparse.Namespace) -> dict:
             kept = [s for s in in_class if s.gene not in annotation.precursors.get(s.srna, ())]
             collapsed = collapse(kept, args.collapse_nt)
             by_window[cls][w] = window_pvalues(collapsed, null, empty_null)
+            for srna in sorted({s.srna for s in collapsed} & null.keys()):
+                fcs, allens = null[srna]
+                shuffled_rows[cls] += [
+                    (w, srna, f, a) for f, a in zip(fcs.tolist(), allens.tolist(), strict=True)
+                ]
             window_stats[cls][str(w)] = {
                 "n_real_rows": len(in_class),
                 "n_after_self_self": len(kept),
@@ -359,6 +407,8 @@ def run(args: argparse.Namespace) -> dict:
         hits = [r for r in rows if significant(r, args)]
         write_table(f"{args.prefix}.{cls}.detected_sites.tsv", rows)
         write_table(f"{args.prefix}.{cls}.significant_sites.tsv", hits)
+        write_window_tests(f"{args.prefix}.{cls}.window_tests.tsv", by_window[cls])
+        write_shuffled_values(f"{args.prefix}.{cls}.shuffled_values.tsv", shuffled_rows[cls])
         stats = {"windows": window_stats[cls], "n_sites": len(rows), "n_significant": len(hits)}
         if annotation.has_validated:
             stats["n_significant_validated"] = sum(r[6] == "yes" for r in hits)

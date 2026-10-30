@@ -406,3 +406,20 @@ def test_output_independent_of_hash_seed(tmp_path: Path) -> None:
         )
         outputs.append([Path(f"{prefix}{suffix}").read_bytes() for suffix in suffixes])
     assert outputs[0] == outputs[1]
+
+
+# Rule 15
+def test_window_tests_and_shuffled_values(tmp_path: Path) -> None:
+    real = [("miR156a", "AT1G01.1", 100, 2, 1, 5)]
+    shuffled = null("miR156a", n=3) + null("miR2", n=2)
+    run(tmp_path, real, shuffled)
+    tests = (tmp_path / "out.miRNA.window_tests.tsv").read_text().splitlines()
+    assert tests[0].split("\t") == list(cleavage_stats.WINDOW_HEADER)
+    assert [r.split("\t")[:2] + r.split("\t")[7:9] for r in tests[1:]] == [
+        ["20", "miR156a", "3", "3"],
+        ["50", "miR156a", "3", "3"],
+    ]
+    values = (tmp_path / "out.miRNA.shuffled_values.tsv").read_text().splitlines()
+    assert values == ["window\tsRNA\tfold.change\tAllenScore"] + [
+        f"{w}\tmiR156a\t1\t6" for w in (20, 20, 20, 50, 50, 50)
+    ]
