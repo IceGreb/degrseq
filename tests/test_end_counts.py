@@ -446,11 +446,6 @@ def test_fates_sum_to_reads_total(tmp_path: Path) -> None:
     assert sum(stats["read_fates"].values()) == stats["reads_total"] == 7
 
 
-def test_compat_not_implemented_yet(tmp_path: Path) -> None:
-    with pytest.raises(SystemExit):
-        run(tmp_path, [unique("a", 10)], extra=["--nanopare_compat"])
-
-
 def test_stats_schema(tmp_path: Path) -> None:
     stats = run(tmp_path, [unique("a", 10)])["stats"]
     assert stats["schema_version"] == 1

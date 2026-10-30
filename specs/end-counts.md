@@ -1,6 +1,6 @@
 # `end-counts`: behavioural spec
 
-Status: **approved** (18/10/2026) · Replaces (nanoPARE 6264d6f): `scripts/python_scripts/readmapIO.py`, called at `endMap.sh` l.472–509; BODY coverage merge (`bedgraph_combine.py`, l.531)
+Status: **approved** (18/10/2026); default mode implemented 18/10, `--nanopare_compat` 29/10 (golden fixture matched byte for byte) · Replaces (nanoPARE 6264d6f): `scripts/python_scripts/readmapIO.py`, called at `endMap.sh` l.472–509; BODY coverage merge (`bedgraph_combine.py`, l.531)
 Pipeline module: `modules/local/end_counts/` · Design-note section: §2.5 · Decisions: `package_build/degrseq_decision_log.md` DL-007–DL-017, DL-029
 
 ## Purpose
@@ -37,7 +37,7 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 1. **Grouping.** Consecutive records with the same query name form one read. A header with `SO:coordinate` is an error. If `NH` is present and a group's number of distinct loci (after rule 4) differs from `NH`, the read is still processed with the loci present, and counted as `nh_mismatch`. This is expected after UMI dedup (pipeline G1).
 2. **Records used.** Unmapped (0x4), supplementary (0x800), QC-fail (0x200) and duplicate-flagged (0x400) records are ignored. Primary and secondary (0x100) records are both loci (DL-013).
 3. **Strand.** SE: a reverse (0x10) record is on `−`, else `+`. PE: the locus strand is mate 1's strand (rule 17).
-4. **Locus identity.** A locus is keyed by (reference, strand, 5′-end position after rule 7). Records with the same key within one read count once (DL-011). Compat: keyed by alignment start only, keeping the first record (#24).
+4. **Locus identity.** A locus is keyed by (reference, strand, 5′-end position after rule 7). Records with the same key within one read count once (DL-011). Compat: keyed by alignment start only (#24), separately for primary and secondary records, primary loci listed first (G9). Colliding records (counted in `loci_key_collisions`) form one locus with the first record's reference and strand and the union of their positions; for a unique read each record passes or fails the clip checks on its own and only passing records add positions. Golden fixture: 127 collisions in 5P, mostly one read's alignments at one start with different introns.
 
 ### Aligned positions and soft-clips
 5. **CIGAR positions.** Aligned positions are those consumed by `M`, `=`, `X`. `D` and `N` advance the reference without adding positions. `I`, `S`, `H` add none.
@@ -71,14 +71,19 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
     - **Block** = reads of one tier with the same leftmost alignment start (integer, chromosome not included) and the same sequence (mate 1 + mate 2). A block is shared once, with `w` = the sum of its reads' weights. Default: reads join a block only if their locus sets are also identical (D3, DL-033). Compat: the block takes the loci of its **last** read (G1, verified 17/10).
     - **Passes:** visit blocks by leftmost start, ascending on odd passes and descending on even passes. Each placed block updates coverage before the next one is visited. A block whose loci all have weight 0 (rule 18) stays for the next pass. Repeat until a pass places nothing; then split the remaining blocks equally (rule 18).
     - **Ties** (blocks with the same leftmost start): bytewise order of the block sequence, then of the sorted locus list (chromosome, start, strand); reversed on descending passes (D2, DL-032; D3, DL-033). Compat: first-seen order in the BAM.
-    - Compat: identical, plus the G1 details as audited.
+    - Compat: identical, plus the G1 and G9 details as audited:
+      - a tier-≥ 2 read stays a multimapper even if only one locus passes rule 11 (it is shared with the others in its tier);
+      - block key: 5P (tier, leftmost start, sequence); BODY (tier, leftmost start, CIGAR of the leftmost record). The block takes the last read's loci; its weight is the read count × the last read's `w`;
+      - per block, in this order: drop loci with < `--min_aligned` CIGAR positions (union over the locus's records, before take-back; all dropped → read lost, counted `discarded_too_short`); rescue weights (rule 18); all 0 → deferred; shares; 5P: loci failing rule 8 or the compat clip checks (3′-only clip, or any non-G base in either clip) get share 0 (all 0 → `multimapped_lost_compat`, G2); a locus merged from several records (rule 4) gets share 0 if any one of them fails, unlike a unique read (`readmapIO.py` l.652–737); remaining shares renormalised;
+      - a pass counts as having placed something only if every block of at least one leftmost start was placed;
+      - the final pass runs once, ascending, ties first-seen: each block is shared by rule 18 if it now has coverage (earlier blocks of the same pass count), else equally.
 
 ### Writing
 21. **Ends track:** the per-nt sums of rules 14 and 19.
-22. **Cap track (5P):** the per-nt sums of the cap contributions, at the 5′-end coordinate (DL-008). Compat: per untemplated G, +1 unweighted for unique reads, at each G's own position (1…k nt upstream); multimappers weighted by share (#8, #26).
-23. **Rounding.** Values are rounded to `--decimals` (default 4; compat 2) with Python `round()`. Rows whose rounded value is 0 are not written. Values are printed without trailing zeros (`1`, `0.5`, `0.3333`) (DL-014). Compat format: 2 decimals, Python `round()` repr (`1.0`), equal adjacent values merged into one row (G4).
+22. **Cap track (5P):** the per-nt sums of the cap contributions, at the 5′-end coordinate (DL-008). Compat: per untemplated G, at each G's own coordinate, from both clips (#34): +1 unweighted for unique reads, recorded before the length check (#33); multimappers weighted by count × share × `w` (#8, #26).
+23. **Rounding.** Values are rounded to `--decimals` (default 4; compat fixed at 2, `--decimals` is an error, DL-047) with Python `round()`. Rows whose rounded value is 0 are not written. Values are printed without trailing zeros (`1`, `0.5`, `0.3333`) (DL-014). Compat format: 2 decimals, Python `round()` repr (`1.0`), equal adjacent values merged into one row (G4).
 24. **Determinism.** Output is byte-identical across runs and `PYTHONHASHSEED`. Accumulation is single-threaded, in the order defined by rules 14 and 20, in float64.
-25. **Coverage files:** only with `--write_coverage` (DL-015).
+25. **Coverage files:** only with `--write_coverage` (DL-015). Compat: a memory warning is printed to stderr; coverage is built one reference and strand at a time, adding in read order (DL-047). Positions past the end of the locus's reference are skipped; they occur only when records on different references merge (rule 4, #24) (DL-048).
 
 ### Stats
 26. See Stats file. Every read in the BAM is counted under exactly one fate.
@@ -113,7 +118,7 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 | #37 | Last bedgraph run dropped when a chromosome/strand's only value is at position 0 | fix + compat (DL-044) | toy only; one extra row per such chromosome/strand |
 | #38 | Cap track compared as text: `0.0` rows written, `1` / `1.0` neighbours not merged, integer repr for unique-only positions | fix + compat (DL-044) | test set: one `0.0` row each in flower_2, flower_3 `uG.minus` |
 | #39 | BODY coverage = sum of strand values already rounded to 2 dp | fix + compat (DL-044) | toy 0.66 vs 0.6667; file has no consumer |
-| #40 | PE: 5′ end over both mates; mate 2 only with 0x2; non-G clip on mate 1 drops only mate 1 | fix; **not reproduced in compat** (DL-043) | none with published STAR flags (PE `EndToEnd`, no protrusion) |
+| #40 | PE: 5′ end over both mates; mate 2 only with 0x2; non-G clip on mate 1 drops only mate 1 | fix; compat refuses paired-end input (DL-043, DL-046) | none with published STAR flags (PE `EndToEnd`, no protrusion) |
 | #25 | Splice-junction tally uses a stale chromosome | not ported (option unused, DL-015) | — |
 | #9 | PE 5P aligned end-to-end | pipeline (STAR args), not here | — |
 
@@ -123,9 +128,9 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 | `--library` | — (required) | `-R 5P` / `-R BODY` plus `--softclip_type 5p --untemp_out G` (5P), `--allow_nonstranded` (BODY) |
 | `--min_aligned` | 16 | `--minmatch 16` |
 | `--multimapper_mode` | `rescue` | always rescue, `--allow_naive` |
-| `--decimals` | 4 | 2 (hard-coded) |
+| `--decimals` | 4 | 2 (hard-coded); not allowed with `--nanopare_compat` (DL-047) |
 | `--write_coverage` | off | coverage always written |
-| `--nanopare_compat` | off | — |
+| `--nanopare_compat` | off | single-end only: paired-end input is an error (DL-046) |
 
 Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present), size-class, BED, junction and multimapper-dump outputs (DL-015).
 
@@ -175,9 +180,9 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
   - every edge case above.
 - **Golden (compat):**
   - a collaborator's honeybee 5P/BODY run (STAR BAMs and EndMap bedgraphs of the original); a patched original reproduced them byte-for-byte on one sample (13/10). Fixtures: an 8 MB subsample.
-  - nanoPARE test set after Phase 5b.
+  - nanoPARE test set after Phase 5b: `tests/fixtures/end_counts_golden/` (flower_1 subsample, DL-038), `tests/test_end_counts_golden.py`. **Exact match 29/10** (all 7 files).
   - Expected: exact match in compat mode.
-- **Default vs golden:** the difference must be explained entirely by the quirk table.
+- **Default vs golden:** the difference must be explained entirely by the quirk table. **Done 29/10** on the golden fixture: fully attributed, no residual (`nanopare_nfcore_design/package_build/29_10_2026_end-counts_default_vs_golden.md`).
 
 ## Open
 - **D1: multimapper order: decided 17/10 (DL-031), the original's order** (rule 20). Background: `package_build/17_10_2026_end-counts_D1_multimapper_order.md`.
@@ -192,7 +197,7 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
 - **D4: decided 22/10 (DL-041):** the four take-back differences (case, `N`, walk order, chromosome edge) are not reproduced in compat; unreachable with STAR output (G3).
 - **D5: decided 22/10 (DL-040):** only the 5′ clip is examined; reads clipped at both ends are kept (capped if the 5′ clip is all G); 3′ G's are never cap signal. Compat reproduces the original. To confirm with the authors (Q8).
 - **D6: decided 23/10 (DL-042):** BODY multimapper blocks keyed by CIGAR is a bug of the original (known issue 36). Default unchanged (rule 20); compat reproduces it for BODY.
-- **D7: decided 23/10 (DL-043):** compat handles paired-end reads like default mode (rule 17); the original's PE differences (G6, known issue 40) are not reproduced.
+- **D7: decided 23/10 (DL-043), changed 30/10 (DL-046):** compat refuses paired-end input. Default mode handles it by rule 17; the original's PE differences (G6, known issue 40) are not reproduced. Paired-end behaviour is with the authors (Q10–Q12).
 - **Gaps (G):** behaviour of the original needed only for `--nanopare_compat` and the golden test. Each needs a targeted audit (nanopare-port-audit) of `readmapIO.py` before compat is implemented. Default mode doesn't depend on them.
   - **G1: closed 17/10 [V]** by a toy-SAM run of the original (`answers/17_10_2026_multimapper_rescue_audit.md` §6): sum of same-strand coverage over the footprint; ascending first pass, alternating; immediate update; zero-coverage blocks deferred; chromosome-blind integer `minpos`; block uses its last read's loci; ties follow first-seen order on Python ≥ 3.6 and the hash seed on Python 3.5 (pinned in `OPTIONS_lmod`), so golden runs need Python ≥ 3.6 or a fixed `PYTHONHASHSEED`. Not run, read from code only: tier = locus count before the length filter (l.284 vs l.593) [I].
   - **G2: closed 22/10 [V]** (toy SAM, `nanopare_nfcore_design/answers/22_10_2026_end-counts_g2_g3.md`). The original computes each locus's share from coverage **before** it drops loci with a non-G untemplated 5′ base (l.606–633, then l.763–766). If every locus with coverage is dropped, the read is lost (`return`, l.770–772) and never retried, even when a usable locus remains; the run log still counts it as rescued. A read whose usable loci all lack coverage is deferred to the equal-split pass and lands on its usable locus. Default mode drops unusable loci first (rule 8), so a read with one usable locus is a unique read. Compat: reproduce the loss and count it as `multimapped_lost_compat` (decided 22/10, DL-039).
@@ -207,6 +212,7 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
   - **G6: closed 23/10 [V]** (toy SAM, `nanopare_nfcore_design/answers/23_10_2026_end-counts_g4_g7.md` §3). Mate 2 is used only with flag 0x2; a read with only mate 2 aligned is lost silently; the 5′ end is the leftmost/rightmost position over **both** mates; a non-G clip on mate 1 of a unique pair drops only mate 1, so the 5′ end moves to mate 2. The last two differ from rule 17 but are unreachable with the published flags (PE `EndToEnd`, no `--alignEndsProtrude`). Not reproduced in compat (D7, DL-043).
   - **G7: closed 23/10 [V]** (`nanopare_nfcore_design/answers/23_10_2026_end-counts_g4_g7.md` §4). `bedgraph_combine.py` sums the plus and minus coverage per nt from the files already rounded to 2 dp (toy: `0.33 + 0.33 = 0.66`, default `0.6667`), then writes with the same writer as G4. No later stage reads `BODY.cov.bedgraph`.
   - **BODY multimapper blocks (found with G7) [V]:** without `--untemp_out` the block identifier is the CIGAR of the leftmost alignment, not the sequence (l.285–307). BODY reads with different sequences but the same locus count, leftmost start and CIGAR form one block and all take the last read's loci. Test set BODY: 1,021–1,548 reads per sample (21–26 % of multimapped reads) moved to loci they never aligned to. Reproduced in compat; default unchanged (D6, DL-042).
+  - **G9: closed 29/10 [V]** (read from code, `readmapIO.py` l.556–632, l.898–958; DL-045). Details of the original's multimapper passes needed for compat, now in rule 20: the length filter (CIGAR positions, ≥) runs when a block is shared, not when it is read, so a tier-≥ 2 read with one long-enough locus is still shared as a multimapper; a block with no long-enough locus is dropped silently; a rescue pass counts as successful only when every block of at least one leftmost start was placed, so a pass that places some blocks but leaves one at every start ends the loop; the final pass is one ascending pass in which a block is shared by coverage if any exists (including coverage added earlier in that pass) and equally otherwise.
   - **G8: closed 18/10 [V]** (`answers/18_10_2026_untemplated_non_g_audit.md`). The published original discards non-G untemplated reads (`--untemp_out G` acts as a filter, `readmapIO.py` l.444–447); rule 8 matches it. The collaborator's honeybee results differ because their `endMap.sh` uses `--untemp_out A C G N T` (and STAR `Local`); the unchanged original with those flags reproduces their TG3 5P files byte-for-byte. Golden data for compat: the original re-run with the published flags on their BAMs.
 - **Implementation notes (not rules):**
   - ends and cap are kept sparse;

@@ -12,8 +12,15 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 - Package skeleton: `degrseq` command dispatcher, spec template, CI, pre-commit.
 - Release workflow: tags `v*` run CI, build, `twine check`, smoke-test the wheel and publish to
   TestPyPI via trusted publishing.
-- `end-counts` (default mode; `--nanopare_compat` not yet implemented): per-nucleotide 5′ ends,
-  cap track (5P), optional coverage, stats JSON. Implements `specs/end-counts.md`.
+- `end-counts`: per-nucleotide 5′ ends, cap track (5P), optional coverage, stats JSON.
+  Implements `specs/end-counts.md`.
+- `end-counts --nanopare_compat`: reproduces the original's quirks (spec quirk table, DL-045).
+  Matches the golden fixture byte for byte (5P ends, cap, BODY ends, BODY coverage); golden test
+  `tests/test_end_counts_golden.py`. Requires `--multimapper_mode rescue`; values fixed at 2
+  decimals, so `--decimals` is an error (DL-047). New read fate `multimapped_lost_compat` (always 0 in default mode).
+  Single-end only: paired-end input is an error (DL-046). With `--write_coverage` it warns about
+  memory and builds coverage one chromosome and strand at a time (DL-047), skipping positions past
+  the chromosome end (DL-048).
 - `end-counts` golden fixture (`tests/fixtures/end_counts_golden/`): nanoPARE test-set subsample and the
   original's outputs on it. Pre-commit whitespace hooks skip `tests/fixtures/` so fixtures stay byte-exact;
   `.gitignore` ignores `golden/` and `scratch/` only at the repo root, so fixture folders are tracked.
@@ -28,10 +35,10 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   differs from nanoPARE on STAR output (no clipped base next to an alignment matches the genome).
 - BODY multimapped reads are grouped by sequence and locus set; nanoPARE groups them by CIGAR
   and counts every read of a group at the last read's loci (21–26 % of BODY multimapped reads in
-  the nanoPARE test set). `--nanopare_compat` will reproduce it.
+  the nanoPARE test set). `--nanopare_compat` reproduces it.
 - Paired-end: the 5′ end always comes from mate 1, and a non-G clip on mate 1 discards the read.
   nanoPARE takes the outermost position over both mates and keeps mate 2; this can't occur with
-  its published STAR settings and is not reproduced in `--nanopare_compat`.
+  its published STAR settings. `--nanopare_compat` refuses paired-end input.
 - Bedgraphs: no `0.0` rows in the cap track; a 5′ end at chromosome position 0 is kept; BODY
   coverage sums unrounded strand values.
 - Only the 5′ clip is examined: reads with untemplated bases at the 3′ side (alone or together

@@ -1,7 +1,6 @@
 """Per-nucleotide RNA 5' end counts from STAR alignments.
 
-Implements specs/end-counts.md (approved 18/10/2026), default mode. `--nanopare_compat` is not
-implemented yet.
+Implements specs/end-counts.md (approved 18/10/2026): default mode and `--nanopare_compat`.
 """
 
 import argparse
@@ -34,6 +33,7 @@ READ_FATES = (
     "multimapped_naive",
     "multimapped_uniform",
     "multimapped_dropped",
+    "multimapped_lost_compat",
     "discarded_too_short",
     "discarded_untemplated_non_g",
     "discarded_3prime_clip_only",
@@ -48,6 +48,7 @@ LOCUS_COUNTERS = (
     "loci_key_collisions",
 )
 G_RUN_BINS = ("0", "1", "2", "3", ">=4")
+COVERAGE_CHUNK = 1_000_000  # intervals per vectorised add (compat coverage)
 
 
 class EndCountsError(Exception):
@@ -65,6 +66,13 @@ class Locus:
     untemplated5: str = ""
     has_untemplated3: bool = False
     status: str = "ok"
+    # Compat only: CIGAR positions, untemplated (coordinate, read-sense base) per side.
+    n_cigar: int = 0
+    cigar_intervals: tuple = ()
+    five_sites: tuple = ()
+    three_sites: tuple = ()
+    cigar: str = ""
+    secondary: bool = False
 
     @property
     def cap(self) -> bool:
@@ -93,12 +101,18 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument(
         "--multimapper_mode", choices=("rescue", "uniform", "unique"), default="rescue"
     )
-    parser.add_argument("--decimals", type=int, default=4)
+    parser.add_argument(
+        "--decimals", type=int, help="default 4; not allowed with --nanopare_compat"
+    )
     parser.add_argument("--write_coverage", action="store_true")
     parser.add_argument("--nanopare_compat", action="store_true")
     args = parser.parse_args(argv)
-    if args.nanopare_compat:
-        parser.error("--nanopare_compat is not implemented yet")
+    if args.nanopare_compat and args.multimapper_mode != "rescue":
+        parser.error("--nanopare_compat requires --multimapper_mode rescue")
+    if args.nanopare_compat and args.decimals is not None:
+        parser.error("--decimals can't be used with --nanopare_compat (fixed at 2)")
+    if args.decimals is None:
+        args.decimals = 2 if args.nanopare_compat else 4
     if args.library == "5P" and args.fasta is None:
         parser.error("--fasta is required for --library 5P")
     if args.min_aligned < 1 or args.decimals < 0:
@@ -155,6 +169,8 @@ def record_locus(record: pysam.AlignedSegment, genome: Genome, reclaim: bool) ->
     if not intervals:
         raise EndCountsError(f"read {record.query_name}: mapped record with no aligned bases")
     start, end = intervals[0][0], intervals[-1][1]
+    cigar_intervals = tuple(intervals)
+    n_cigar = sum(e - s for s, e in intervals)
 
     left = ops[0][1] if ops[0][0] == SOFT_CLIP else 0
     right = ops[-1][1] if len(ops) > 1 and ops[-1][0] == SOFT_CLIP else 0
@@ -187,13 +203,18 @@ def record_locus(record: pysam.AlignedSegment, genome: Genome, reclaim: bool) ->
             if k:
                 intervals[-1] = (intervals[-1][0], end)
 
+    left_sites = tuple(zip(range(start - len(left_untemp), start), left_untemp, strict=True))
+    right_sites = tuple(zip(range(end, end + len(right_untemp)), right_untemp, strict=True))
     if record.is_reverse:
         strand, five = "-", end - 1
         untemp5 = right_untemp.translate(COMPLEMENT)[::-1]
         untemp3 = left_untemp
+        five_sites = tuple((p, b.translate(COMPLEMENT)) for p, b in right_sites)
+        three_sites = tuple((p, b.translate(COMPLEMENT)) for p, b in left_sites)
     else:
         strand, five = "+", start
         untemp5, untemp3 = left_untemp, right_untemp
+        five_sites, three_sites = left_sites, right_sites
     return Locus(
         ref_id=record.reference_id,
         strand=strand,
@@ -203,6 +224,12 @@ def record_locus(record: pysam.AlignedSegment, genome: Genome, reclaim: bool) ->
         aln_start=record.reference_start,
         untemplated5=untemp5,
         has_untemplated3=bool(untemp3),
+        n_cigar=n_cigar,
+        cigar_intervals=cigar_intervals,
+        five_sites=five_sites,
+        three_sites=three_sites,
+        cigar=record.cigarstring or "",
+        secondary=record.is_secondary,
     )
 
 
@@ -289,6 +316,7 @@ class Counter:
         self.refs = refs
         self.genome = genome
         self.is_5p = args.library == "5P"
+        self.compat = args.nanopare_compat
         self.ends: dict[tuple[int, str, int], float] = {}
         self.cap: dict[tuple[int, str, int], float] = {}
         self.stats: dict[str, float | int] = dict.fromkeys(
@@ -321,6 +349,12 @@ class Counter:
     def locus_sort_key(self, locus: Locus) -> tuple:
         return (self.refs[locus.ref_id].encode(), locus.five, locus.strand)
 
+    def check_nh(self, records: list[pysam.AlignedSegment], tier: int) -> None:
+        """Rule 1: loci found vs NH."""
+        nh = next((r.get_tag("NH") for r in records if r.has_tag("NH")), None)
+        if nh is not None and nh != tier:
+            self.stats["nh_mismatch"] += 1
+
     def process(self, group: list[pysam.AlignedSegment]) -> None:
         self.stats["reads_total"] += 1
         records = [r for r in group if not r.flag & SKIP_FLAGS]
@@ -330,6 +364,8 @@ class Counter:
             return
 
         if any(r.is_paired for r in records):
+            if self.compat:
+                raise EndCountsError("--nanopare_compat supports single-end reads only (DL-046)")
             pairs = pair_records(
                 [r for r in records if not r.is_read2], [r for r in records if r.is_read2]
             )
@@ -337,18 +373,29 @@ class Counter:
         else:
             loci_all = [record_locus(r, self.genome, self.is_5p) for r in records]
 
+        if self.compat:
+            # Rule 4 compat: primary loci first, keyed by start only; colliding records share a
+            # locus (#24).
+            groups: dict[tuple, list[Locus]] = {}
+            for locus in sorted(loci_all, key=lambda x: x.secondary):
+                key: tuple = (locus.secondary, locus.aln_start)
+                if key in groups:
+                    self.stats["loci_key_collisions"] += 1
+                groups.setdefault(key, []).append(locus)
+            self.check_nh(records, len(groups))
+            self.process_compat(records, list(groups.values()))
+            return
+
         # Rule 4: one locus per (reference, strand, 5' end); the first record wins.
         loci: dict[tuple, Locus] = {}
         for locus in loci_all:
             if locus.status == "no_mate1":
-                key: tuple = ("no_mate1", locus.ref_id, locus.strand, locus.aln_start)
+                key = ("no_mate1", locus.ref_id, locus.strand, locus.aln_start)
             else:
                 key = (locus.ref_id, locus.strand, locus.five)
             loci.setdefault(key, locus)
         tier = len(loci)
-        nh = next((r.get_tag("NH") for r in records if r.has_tag("NH")), None)
-        if nh is not None and nh != tier:
-            self.stats["nh_mismatch"] += 1
+        self.check_nh(records, tier)
 
         # Rules 8 and 11; a locus is counted once, under its first failing reason.
         usable: list[Locus] = []
@@ -401,6 +448,187 @@ class Counter:
         block.weight += weight
         block.n_reads += 1
 
+    def clip_failure(self, locus: Locus) -> str | None:
+        """Compat clip checks over both clips (rule 9, #34)."""
+        if not (locus.five_sites or locus.three_sites):
+            return None
+        if not locus.five_sites:
+            return "3prime_clip_only"
+        if any(base != "G" for _, base in locus.five_sites + locus.three_sites):
+            return "untemplated_non_g"
+        return None
+
+    def add_cap_sites(self, locus: Locus, value: float) -> None:
+        """Compat cap track: one count per untemplated G at its own coordinate (#8, #34)."""
+        length = self.genome.lengths[self.refs[locus.ref_id]]
+        for pos, _ in locus.five_sites + locus.three_sites:
+            if 0 <= pos < length:
+                key = (locus.ref_id, locus.strand, pos)
+                self.cap[key] = self.cap.get(key, 0) + value
+
+    def merge_group(self, group: list[Locus], keep: list[Locus] | None = None) -> Locus:
+        """One compat locus from records sharing a start: union of positions (#24)."""
+        first = group[0]
+        members = group if keep is None else keep
+        intervals = merge_intervals([iv for locus in members for iv in locus.intervals])
+        n = sum(e - s for s, e in intervals)
+        five = intervals[0][0] if first.strand == "+" else intervals[-1][1] - 1
+        with_sites = [locus for locus in members if locus.five_sites or locus.three_sites]
+        last = with_sites[-1] if with_sites else first
+        failures = [self.clip_failure(locus) for locus in group] if self.is_5p else []
+        # Length check: union of CIGAR positions of all colliding records, before reclaim.
+        cigar_ivs = merge_intervals([iv for locus in group for iv in locus.cigar_intervals])
+        return Locus(
+            ref_id=first.ref_id,
+            strand=first.strand,
+            five=five,
+            intervals=intervals,
+            n_positions=n,
+            aln_start=first.aln_start,
+            status=next((f for f in failures if f), None) or "ok",
+            n_cigar=sum(e - s for s, e in cigar_ivs),
+            five_sites=last.five_sites,
+            three_sites=last.three_sites,
+            cigar=min(locus.cigar for locus in group),
+            secondary=first.secondary,
+        )
+
+    def process_compat(
+        self, records: list[pysam.AlignedSegment], groups: list[list[Locus]]
+    ) -> None:
+        tier = len(groups)
+        usable = [g for g in groups if g[0].status != "no_mate1"]
+        self.stats["loci_no_mate1"] += len(groups) - len(usable)
+        if not usable:
+            self.stats["discarded_no_mate1"] += 1
+            return
+        weight = read_weight(records)
+
+        if tier == 1:
+            # Each record is checked on its own; failing records add nothing (#24, #34).
+            group = usable[0]
+            failures = [self.clip_failure(r) if self.is_5p else None for r in group]
+            passing = [r for r, f in zip(group, failures, strict=True) if f is None]
+            for r in passing:
+                if self.is_5p:
+                    # G's recorded before the length check (#33), unweighted int (#38).
+                    self.add_cap_sites(r, 1)
+            locus = self.merge_group(group, passing) if passing else None
+            too_short = locus is None or locus.n_positions <= self.args.min_aligned
+            if too_short:
+                failure = next((f for f in failures if f), None)
+                reason = failure if locus is None and failure else "too_short"
+                if reason != "3prime_clip_only":
+                    self.stats[f"loci_{reason}"] += 1
+                self.stats[f"discarded_{reason}"] += 1
+                return
+            assert locus is not None
+            self.stats["unique"] += 1
+            key = (locus.ref_id, locus.strand, locus.five)
+            self.ends[key] = self.ends.get(key, 0.0) + weight
+            self.add_interval_cov(locus, weight)
+            if self.is_5p:
+                self.g_runs[g_run_bin(len(locus.five_sites))] += 1
+                if locus.five_sites:
+                    self.cap_positive_reads += weight
+            return
+
+        # Block of identical reads; it keeps the last read's loci and weight (G1, #36).
+        merged = [self.merge_group(g) for g in usable]
+        minpos = min(locus.aln_start for locus in merged)
+        if self.is_5p:
+            ident = read_sequence(records)
+        else:
+            ident = next(locus.cigar for locus in merged if locus.aln_start == minpos)
+        usable = merged
+        block_key = (tier, minpos, ident)
+        block = self.blocks.get(block_key)
+        if block is None:
+            block = Block(loci=usable, sort_key=(minpos,))
+            self.blocks[block_key] = block
+        block.loci = usable
+        block.weight = weight
+        block.n_reads += 1
+
+    def share_compat(self, block: Block, cov: dict, final: bool) -> bool:
+        """Rule 20 compat for one block; False if it stays for the next pass."""
+        keep = [i for i, locus in enumerate(block.loci) if locus.n_cigar >= self.args.min_aligned]
+        if not keep:
+            self.stats["loci_too_short"] += len(block.loci)
+            self.stats["discarded_too_short"] += block.n_reads
+            return True
+        loci = [block.loci[i] for i in keep]
+        idx = [block.shares_idx[i] for i in keep]
+        weights = [
+            float(cov[(locus.ref_id, locus.strand)][i].sum())
+            for locus, i in zip(loci, idx, strict=True)
+        ]
+        if not self.is_5p and sum(weights) == 0:
+            flip = {"+": "-", "-": "+"}
+            weights = [
+                float(cov[(locus.ref_id, flip[locus.strand])][i].sum())
+                for locus, i in zip(loci, idx, strict=True)
+            ]
+        naive = sum(weights) == 0
+        if naive:
+            if not final:
+                return False
+            weights = [1.0] * len(loci)
+        total = float(sum(weights))
+        shares = [w / total for w in weights]
+        if self.is_5p:
+            for i, locus in enumerate(loci):
+                if locus.status != "ok":
+                    shares[i] = 0.0
+                    if locus.status == "untemplated_non_g":
+                        self.stats["loci_untemplated_non_g"] += 1
+        if sum(shares) == 0:
+            self.stats["multimapped_lost_compat"] += block.n_reads
+            return True
+        norm = sum(shares)
+        shares = [s / norm for s in shares]
+        for locus, i, share in zip(loci, idx, shares, strict=True):
+            if share == 0:
+                continue
+            value = float(block.n_reads) * share * block.weight
+            key = (locus.ref_id, locus.strand, locus.five)
+            self.ends[key] = self.ends.get(key, 0.0) + value
+            self.add_interval_cov(locus, value)
+            cov[(locus.ref_id, locus.strand)][i] += value
+            if self.is_5p and locus.five_sites:
+                self.add_cap_sites(locus, value)
+                self.cap_positive_reads += value
+        self.stats["multimapped_naive" if naive else "multimapped_rescued"] += block.n_reads
+        return True
+
+    def run_multimappers_compat(self) -> None:
+        if not self.blocks:
+            return
+        by_tier: dict[int, list[Block]] = {}
+        for key, block in self.blocks.items():
+            by_tier.setdefault(key[0], []).append(block)
+        cov = self.rescue_coverage(by_tier)
+        for tier in sorted(by_tier):
+            # Blocks per leftmost start, first-seen order within a start.
+            by_start: dict[int, list[Block]] = {}
+            for block in by_tier[tier]:
+                by_start.setdefault(block.sort_key[0], []).append(block)
+            ascending = True
+            cleared = True
+            while cleared:
+                cleared = False
+                for start in sorted(by_start, reverse=not ascending):
+                    left = [b for b in by_start[start] if not self.share_compat(b, cov, False)]
+                    if left:
+                        by_start[start] = left
+                    else:
+                        del by_start[start]
+                        cleared = True
+                ascending = not ascending
+            for start in sorted(by_start):
+                for block in by_start[start]:
+                    self.share_compat(block, cov, True)
+
     def place(self, block: Block, shares: list[float], cov: dict | None) -> None:
         """Rule 19; `cov` is updated at once so later blocks see this one."""
         for i, (locus, share) in enumerate(zip(block.loci, shares, strict=True)):
@@ -411,6 +639,9 @@ class Counter:
                 cov[(locus.ref_id, locus.strand)][block.shares_idx[i]] += value
 
     def run_multimappers(self) -> None:
+        if self.compat:
+            self.run_multimappers_compat()
+            return
         if not self.blocks:
             return
         by_tier: dict[int, list[Block]] = {}
@@ -513,7 +744,81 @@ class Counter:
                 ]
         return cov
 
+    def write_compat(self) -> None:
+        """Rule 23 compat and DL-044: the original's bedgraph format."""
+        prefix = self.args.prefix
+        order = sorted(range(len(self.refs)), key=lambda i: self.refs[i].encode())
+        tracks = [("ends", self.ends, False)] + ([("cap", self.cap, True)] if self.is_5p else [])
+        for name, track, cap in tracks:
+            for strand, label in (("+", "plus"), ("-", "minus")):
+                by_ref: dict[int, dict[int, float]] = {}
+                for (ref_id, s, pos), value in track.items():
+                    if s == strand:
+                        by_ref.setdefault(ref_id, {})[pos] = value
+                with open(f"{prefix}.{name}.{label}.bedgraph", "w") as out:
+                    for ref_id in order:
+                        if ref_id in by_ref:
+                            write_compat_runs(out, self.refs[ref_id], by_ref[ref_id], cap)
+        if self.args.write_coverage:
+            # One reference and strand in memory at a time.
+            index = self.coverage_index()
+            if self.is_5p:
+                for code, label in ((0, "plus"), (1, "minus")):
+                    with open(f"{prefix}.cov.{label}.bedgraph", "w") as out:
+                        for ref_id in order:
+                            if (ref_id, code) in index:
+                                values = self.coverage_array(ref_id, index[(ref_id, code)])
+                                write_compat_runs(
+                                    out, self.refs[ref_id], nonzero_dict(values), False
+                                )
+            else:
+                # #39: strand values already rounded to 2 dp, then summed.
+                with open(f"{prefix}.cov.bedgraph", "w") as out:
+                    for ref_id in order:
+                        summed = np.zeros(self.genome.lengths[self.refs[ref_id]], dtype=np.float64)
+                        for code in (0, 1):
+                            if (ref_id, code) not in index:
+                                continue
+                            values = self.coverage_array(ref_id, index[(ref_id, code)])
+                            nz = np.flatnonzero(values)
+                            summed[nz] += [round(v, 2) for v in values[nz].tolist()]
+                        if summed.any():
+                            write_compat_runs(out, self.refs[ref_id], nonzero_dict(summed), False)
+
+    def coverage_index(self) -> dict[tuple[int, int], np.ndarray]:
+        """Coverage interval indices per (reference, strand code), in read order."""
+        refs = np.frombuffer(self.cov_ref, dtype=np.int32)
+        strands = np.frombuffer(self.cov_strand, dtype=np.int8)
+        if refs.size == 0:
+            return {}
+        order = np.lexsort((strands, refs))  # stable: read order kept within a group
+        keys = refs[order].astype(np.int64) * 2 + strands[order]
+        groups = np.split(order, np.flatnonzero(np.diff(keys)) + 1)
+        return {(int(refs[g[0]]), int(strands[g[0]])): g for g in groups}
+
+    def coverage_array(self, ref_id: int, idx: np.ndarray) -> np.ndarray:
+        """Per-nt coverage of one reference and strand."""
+        starts = np.frombuffer(self.cov_start, dtype=np.int64)[idx]
+        ends = np.frombuffer(self.cov_end, dtype=np.int64)[idx]
+        weights = np.frombuffer(self.cov_w, dtype=np.float64)[idx]
+        values = np.zeros(self.genome.lengths[self.refs[ref_id]], dtype=np.float64)
+        # Per-position adds in read order, as the original sums floats (no cumsum error);
+        # chunked so the expanded positions stay small.
+        for i in range(0, len(idx), COVERAGE_CHUNK):
+            s, e = starts[i : i + COVERAGE_CHUNK], ends[i : i + COVERAGE_CHUNK]
+            lengths = e - s
+            offsets = np.repeat(np.cumsum(lengths) - lengths - s, lengths)
+            positions = np.arange(int(lengths.sum())) - offsets
+            chunk_weights = np.repeat(weights[i : i + COVERAGE_CHUNK], lengths)
+            # Past the reference end only after a cross-chromosome collision (#24): skipped.
+            inside = positions < values.size
+            np.add.at(values, positions[inside], chunk_weights[inside])
+        return values
+
     def write(self) -> None:
+        if self.compat:
+            self.write_compat()
+            return
         prefix, decimals = self.args.prefix, self.args.decimals
         order = sorted(range(len(self.refs)), key=lambda i: self.refs[i].encode())
         rank = {ref_id: n for n, ref_id in enumerate(order)}
@@ -593,6 +898,33 @@ def write_runs(out, chrom: str, values: np.ndarray, decimals: int) -> None:
             out.write(f"{chrom}\t{s}\t{e}\t{format_value(value, decimals)}\n")
 
 
+def nonzero_dict(values: np.ndarray) -> dict[int, float]:
+    idx = np.flatnonzero(values)
+    return dict(zip(idx.tolist(), values[idx].tolist(), strict=True))
+
+
+def write_compat_runs(out, chrom: str, values: dict[int, float], cap: bool) -> None:
+    """Compat rows: rounded to 2 dp, then equal adjacent values merged.
+
+    Cap rows are compared as text and written even when `0.0` (#38); a chromosome/strand whose
+    only value is at position 0 is not written (#37).
+    """
+    if not values or list(values) == [0]:
+        return
+    run: list | None = None
+    for pos in sorted(values):
+        text = str(round(values[pos], 2))
+        keep = cap or float(text) != 0
+        if run is not None and keep and pos == run[1] and text == run[2]:
+            run[1] = pos + 1
+            continue
+        if run is not None:
+            out.write(f"{chrom}\t{run[0]}\t{run[1]}\t{run[2]}\n")
+        run = [pos, pos + 1, text] if keep else None
+    if run is not None:
+        out.write(f"{chrom}\t{run[0]}\t{run[1]}\t{run[2]}\n")
+
+
 def open_inputs(args: argparse.Namespace) -> tuple[pysam.AlignmentFile, Genome, list[str]]:
     bam = pysam.AlignmentFile(args.bam, "rb", check_sq=False)
     if bam.header.to_dict().get("HD", {}).get("SO") == "coordinate":
@@ -611,6 +943,13 @@ def open_inputs(args: argparse.Namespace) -> tuple[pysam.AlignmentFile, Genome, 
 
 def main(argv: Sequence[str]) -> None:
     args = parse_args(argv)
+    if args.nanopare_compat and args.write_coverage:
+        print(
+            "degrseq end-counts: warning: --write_coverage with --nanopare_compat keeps every "
+            "aligned interval in memory (about 30 bytes each) plus up to two arrays the length "
+            "of the longest chromosome (8 bytes per base each); request memory accordingly",
+            file=sys.stderr,
+        )
     try:
         bam, genome, refs = open_inputs(args)
         counter = Counter(args, refs, genome)

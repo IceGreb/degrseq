@@ -68,12 +68,15 @@ def build_inputs(tmp_path: Path, records: list[str], sort_order: str = "unsorted
     return bam_path, fasta
 
 
-def read_bedgraph(path: Path) -> dict[tuple[str, int], str]:
+def read_bedgraph(path: Path, merged: bool = False) -> dict[tuple[str, int], str]:
+    """Per-nt values; `merged` expands compat rows that span several nucleotides."""
     rows = {}
     for line in path.read_text().splitlines():
         chrom, start, end, value = line.split("\t")
-        rows[(chrom, int(start))] = value
-        assert int(end) == int(start) + 1
+        if not merged:
+            assert int(end) == int(start) + 1
+        for pos in range(int(start), int(end)):
+            rows[(chrom, pos)] = value
     return rows
 
 
@@ -87,10 +90,12 @@ def run(
         + (extra or [])
     )
     result = {"stats": json.loads(Path(f"{prefix}.end-counts.stats.json").read_text())}
+    merged = "--nanopare_compat" in (extra or [])
     tracks = ["ends", "cap"] if library == "5P" else ["ends"]
     for track in tracks:
         for label, strand in (("plus", "+"), ("minus", "-")):
-            result[(track, strand)] = read_bedgraph(Path(f"{prefix}.{track}.{label}.bedgraph"))
+            path = Path(f"{prefix}.{track}.{label}.bedgraph")
+            result[(track, strand)] = read_bedgraph(path, merged)
     result["prefix"] = prefix
     return result
 
