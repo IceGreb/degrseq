@@ -8,10 +8,10 @@ import json
 import math
 import sys
 from bisect import bisect_right
-from itertools import pairwise
 from collections import defaultdict
 from collections.abc import Sequence
 from dataclasses import dataclass, field
+from itertools import pairwise
 from pathlib import Path
 
 SCHEMA_VERSION = 1

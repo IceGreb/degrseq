@@ -1,20 +1,43 @@
-# scratch: gene regions = exons ∪ 100-nt flanks per transcript, merged per gene/strand
-import sys, collections
-tx = collections.defaultdict(list); info = {}
-for l in open(sys.argv[1]):
-    f = l.rstrip('\n').split('\t')
-    if len(f) < 9 or f[2] not in ('exon', 'pseudogenic_exon'): continue
-    for p in f[8].split(';'):
-        if p.startswith('Parent='):
-            for t in p[7:].split(','):
-                tx[t].append((int(f[3]) - 1, int(f[4]))); info[t] = (f[0], f[6], t.split('.')[0])
-iv = collections.defaultdict(list)
-for t, ex in tx.items():
-    ex.sort(); c, s, g = info[t]
-    iv[(c, s, g)] += ex + [(max(ex[0][0] - 100, 0), ex[0][0]), (ex[-1][1], ex[-1][1] + 100)]
-for (c, s, g), xs in sorted(iv.items()):
-    xs.sort(); m = []
-    for a, b in xs:
-        if m and a <= m[-1][1]: m[-1][1] = max(m[-1][1], b)
-        else: m.append([a, b])
-    for a, b in m: print(f"{c}\t{a}\t{b}\t{g}\t0\t{s}")
+"""Gene regions for the scale-factor fixture: exons + 100-nt flanks, merged per gene."""
+
+import sys
+from collections import defaultdict
+
+BUFFER = 100
+EXON_TYPES = ("exon", "pseudogenic_exon")
+
+
+def main(gff: str) -> None:
+    exons: dict[str, list[tuple[int, int]]] = defaultdict(list)
+    info: dict[str, tuple[str, str, str]] = {}
+    with open(gff, encoding="utf-8") as handle:
+        for line in handle:
+            fields = line.rstrip("\n").split("\t")
+            if len(fields) < 9 or fields[2] not in EXON_TYPES:
+                continue
+            for attr in fields[8].split(";"):
+                if attr.startswith("Parent="):
+                    for tx in attr[7:].split(","):
+                        exons[tx].append((int(fields[3]) - 1, int(fields[4])))
+                        info[tx] = (fields[0], fields[6], tx.split(".")[0])
+
+    intervals: dict[tuple[str, str, str], list[tuple[int, int]]] = defaultdict(list)
+    for tx, ex in exons.items():
+        ex.sort()
+        flanks = [(max(ex[0][0] - BUFFER, 0), ex[0][0]), (ex[-1][1], ex[-1][1] + BUFFER)]
+        intervals[info[tx]] += ex + flanks
+
+    for (chrom, strand, gene), ivs in sorted(intervals.items()):
+        ivs.sort()
+        merged: list[list[int]] = []
+        for start, end in ivs:
+            if merged and start <= merged[-1][1]:
+                merged[-1][1] = max(merged[-1][1], end)
+            else:
+                merged.append([start, end])
+        for start, end in merged:
+            print(f"{chrom}\t{start}\t{end}\t{gene}\t0\t{strand}")
+
+
+if __name__ == "__main__":
+    main(sys.argv[1])
