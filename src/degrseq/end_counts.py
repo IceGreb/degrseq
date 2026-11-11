@@ -4,7 +4,9 @@ Implements specs/end-counts.md (approved 18/10/2026): default mode and `--nanopa
 """
 
 import argparse
+import hashlib
 import json
+import math
 import sys
 from array import array
 from collections.abc import Iterator, Sequence
@@ -115,8 +117,10 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
         args.decimals = 2 if args.nanopare_compat else 4
     if args.library == "5P" and args.fasta is None:
         parser.error("--fasta is required for --library 5P")
-    if args.min_aligned < 1 or args.decimals < 0:
-        parser.error("--min_aligned must be >= 1 and --decimals >= 0")
+    if args.min_aligned < 1:
+        parser.error("--min_aligned must be >= 1")
+    if args.decimals < 0:
+        parser.error("--decimals must be >= 0")
     return args
 
 
@@ -237,14 +241,16 @@ def pair_records(
     mate1: list[pysam.AlignedSegment], mate2: list[pysam.AlignedSegment]
 ) -> list[tuple[pysam.AlignedSegment | None, pysam.AlignedSegment | None]]:
     """Rule 17: a locus is a mate-1 record plus the mate-2 record with the same HI tag."""
+    # HI only when every record has it; mixed tagging falls back to mate positions.
+    use_hi = all(r.has_tag("HI") for r in mate1 + mate2)
 
     def hit(record: pysam.AlignedSegment) -> tuple:
-        if record.has_tag("HI"):
+        if use_hi:
             return ("HI", record.get_tag("HI"))
         return ("pos", record.reference_id, record.reference_start)
 
     def mate_hit(record: pysam.AlignedSegment) -> tuple:
-        if record.has_tag("HI"):
+        if use_hi:
             return ("HI", record.get_tag("HI"))
         return ("pos", record.next_reference_id, record.next_reference_start)
 
@@ -283,20 +289,26 @@ def pair_locus(
 def read_weight(records: list[pysam.AlignedSegment]) -> float:
     """Rule 13."""
     values = {float(r.get_tag("XW")) for r in records if r.has_tag("XW")}
+    if any(not (math.isfinite(w) and w >= 0) for w in values):
+        raise EndCountsError(f"read {records[0].query_name}: XW must be finite and >= 0")
     if len(values) > 1:
         raise EndCountsError(f"read {records[0].query_name}: records with different XW values")
     return values.pop() if values else 1.0
 
 
-def read_sequence(records: list[pysam.AlignedSegment]) -> str:
-    """Mate 1 + mate 2 in read orientation, for block identity (rule 20)."""
-    parts = []
-    for want_read2 in (False, True):
+def read_sequences(records: list[pysam.AlignedSegment]) -> tuple[str, str]:
+    """Mate 1 and mate 2 in read orientation, for block identity (rule 20)."""
+    parts = ["", ""]
+    for i, want_read2 in enumerate((False, True)):
         for r in records:
             if r.is_read2 == want_read2 and r.query_sequence is not None:
-                parts.append(r.get_forward_sequence())
+                parts[i] = r.get_forward_sequence()
                 break
-    return "".join(parts)
+    return parts[0], parts[1]
+
+
+def read_sequence(records: list[pysam.AlignedSegment]) -> str:
+    return "".join(read_sequences(records))
 
 
 def g_run_bin(n: int) -> str:
@@ -317,6 +329,7 @@ class Counter:
         self.genome = genome
         self.is_5p = args.library == "5P"
         self.compat = args.nanopare_compat
+        self.read_names_repeated = 0
         self.ends: dict[tuple[int, str, int], float] = {}
         self.cap: dict[tuple[int, str, int], float] = {}
         self.stats: dict[str, float | int] = dict.fromkeys(
@@ -386,6 +399,15 @@ class Counter:
             self.process_compat(records, list(groups.values()))
             return
 
+        for locus in loci_all:
+            ref = self.refs[locus.ref_id]
+            end = max(e for _, e in locus.intervals + list(locus.cigar_intervals))
+            if end > self.genome.lengths[ref]:
+                raise EndCountsError(
+                    f"read {records[0].query_name}: alignment ends at {end}, past the end of "
+                    f"{ref} ({self.genome.lengths[ref]} nt); do the BAM and FASTA match?"
+                )
+
         # Rule 4: one locus per (reference, strand, 5' end); the first record wins.
         loci: dict[tuple, Locus] = {}
         for locus in loci_all:
@@ -417,14 +439,14 @@ class Counter:
                     self.stats[f"discarded_{reason}"] += 1
                     return
 
-        if self.is_5p and any(locus.has_untemplated3 for locus in usable):
-            self.stats["kept_3prime_clip_only"] += 1
+        three_clip = self.is_5p and any(locus.has_untemplated3 for locus in usable)
         weight = read_weight(records)
 
         if len(usable) == 1:
             # Rule 14
             locus = usable[0]
             self.stats["unique" if tier == 1 else "unique_after_filter"] += 1
+            self.stats["kept_3prime_clip_only"] += three_clip
             self.add_point(locus, weight)
             self.add_interval_cov(locus, weight)
             if self.is_5p:
@@ -434,16 +456,18 @@ class Counter:
         if self.args.multimapper_mode == "unique":
             self.stats["multimapped_dropped"] += 1
             return
+        self.stats["kept_3prime_clip_only"] += three_clip
 
         # Rule 20: blocks of identical reads with the same locus set (D3).
         usable.sort(key=self.locus_sort_key)
         locus_keys = tuple(self.locus_sort_key(locus) for locus in usable)
         minpos = min(locus.aln_start for locus in loci.values())
-        sequence = read_sequence(records)
-        block_key = (tier, minpos, sequence, locus_keys)
+        sequences = read_sequences(records)
+        block_key = (tier, minpos, sequences, locus_keys)
         block = self.blocks.get(block_key)
         if block is None:
-            block = Block(loci=usable, sort_key=(minpos, sequence.encode(), locus_keys))
+            sort_key = (minpos, "".join(sequences).encode(), locus_keys)
+            block = Block(loci=usable, sort_key=sort_key)
             self.blocks[block_key] = block
         block.weight += weight
         block.n_reads += 1
@@ -714,14 +738,15 @@ class Counter:
             for strand in "+-":
                 cov[(ref, strand)] = np.zeros(len(p), dtype=np.float64)
 
-        refs = np.frombuffer(self.cov_ref, dtype=np.int32)
-        strands = np.frombuffer(self.cov_strand, dtype=np.int8)
         starts = np.frombuffer(self.cov_start, dtype=np.int64)
         ends = np.frombuffer(self.cov_end, dtype=np.int64)
         weights = np.frombuffer(self.cov_w, dtype=np.float64)
+        index = self.coverage_index()
         for ref, p in grid.items():
             for strand_code, strand in ((0, "+"), (1, "-")):
-                mask = (refs == ref) & (strands == strand_code)
+                mask = index.get((ref, strand_code))
+                if mask is None:
+                    continue
                 i0 = np.searchsorted(p, starts[mask], "left")
                 i1 = np.searchsorted(p, ends[mask], "left")
                 lengths = i1 - i0
@@ -755,7 +780,7 @@ class Counter:
                 for (ref_id, s, pos), value in track.items():
                     if s == strand:
                         by_ref.setdefault(ref_id, {})[pos] = value
-                with open(f"{prefix}.{name}.{label}.bedgraph", "w") as out:
+                with open(f"{prefix}.{name}.{label}.bedgraph", "w", encoding="utf-8") as out:
                     for ref_id in order:
                         if ref_id in by_ref:
                             write_compat_runs(out, self.refs[ref_id], by_ref[ref_id], cap)
@@ -764,7 +789,7 @@ class Counter:
             index = self.coverage_index()
             if self.is_5p:
                 for code, label in ((0, "plus"), (1, "minus")):
-                    with open(f"{prefix}.cov.{label}.bedgraph", "w") as out:
+                    with open(f"{prefix}.cov.{label}.bedgraph", "w", encoding="utf-8") as out:
                         for ref_id in order:
                             if (ref_id, code) in index:
                                 values = self.coverage_array(ref_id, index[(ref_id, code)])
@@ -773,7 +798,7 @@ class Counter:
                                 )
             else:
                 # #39: strand values already rounded to 2 dp, then summed.
-                with open(f"{prefix}.cov.bedgraph", "w") as out:
+                with open(f"{prefix}.cov.bedgraph", "w", encoding="utf-8") as out:
                     for ref_id in order:
                         summed = np.zeros(self.genome.lengths[self.refs[ref_id]], dtype=np.float64)
                         for code in (0, 1):
@@ -828,7 +853,7 @@ class Counter:
                 keys = sorted(
                     (k for k in track if k[1] == strand), key=lambda k: (rank[k[0]], k[2])
                 )
-                with open(f"{prefix}.{name}.{label}.bedgraph", "w") as out:
+                with open(f"{prefix}.{name}.{label}.bedgraph", "w", encoding="utf-8") as out:
                     for ref_id, _, pos in keys:
                         value = round(track[(ref_id, strand, pos)], decimals)
                         if value != 0:
@@ -838,8 +863,7 @@ class Counter:
             self.write_coverage(order)
 
     def write_coverage(self, order: list[int]) -> None:
-        refs = np.frombuffer(self.cov_ref, dtype=np.int32)
-        strands = np.frombuffer(self.cov_strand, dtype=np.int8)
+        index = self.coverage_index()
         starts = np.frombuffer(self.cov_start, dtype=np.int64)
         ends = np.frombuffer(self.cov_end, dtype=np.int64)
         weights = np.frombuffer(self.cov_w, dtype=np.float64)
@@ -851,17 +875,25 @@ class Counter:
             outputs = {0: [0, 1]}
             names = {0: f"{prefix}.cov.bedgraph"}
         for out_id, strand_codes in outputs.items():
-            with open(names[out_id], "w") as out:
+            with open(names[out_id], "w", encoding="utf-8") as out:
                 for ref_id in order:
-                    mask = (refs == ref_id) & np.isin(strands, strand_codes)
-                    if not mask.any():
+                    parts = [index[(ref_id, c)] for c in strand_codes if (ref_id, c) in index]
+                    if not parts:
                         continue
+                    idx = np.sort(np.concatenate(parts))  # read order across strands
+                    s, e, w = starts[idx], ends[idx], weights[idx]
+                    # Sweep over breakpoints only; same adds per position as a dense array.
+                    bounds = np.unique(np.concatenate((s, e)))
+                    diff = np.zeros(bounds.size, dtype=np.float64)
+                    np.add.at(diff, np.searchsorted(bounds, s), w)
+                    np.add.at(diff, np.searchsorted(bounds, e), -w)
+                    values = np.round(np.cumsum(diff), decimals)
                     length = self.genome.lengths[self.refs[ref_id]]
-                    diff = np.zeros(length + 1, dtype=np.float64)
-                    np.add.at(diff, starts[mask], weights[mask])
-                    np.add.at(diff, ends[mask], -weights[mask])
-                    values = np.round(np.cumsum(diff[:-1]), decimals)
-                    write_runs(out, self.refs[ref_id], values, decimals)
+                    if bounds[-1] < length:
+                        bounds = np.append(bounds, length)
+                    else:
+                        values = values[:-1]
+                    write_segment_runs(out, self.refs[ref_id], bounds, values, decimals)
 
     def stats_json(self) -> dict:
         stats: dict = {
@@ -878,6 +910,7 @@ class Counter:
             "loci": {k: self.stats[k] for k in LOCUS_COUNTERS},
             "kept_3prime_clip_only": self.stats["kept_3prime_clip_only"],
             "nh_mismatch": self.stats["nh_mismatch"],
+            "read_names_repeated": self.read_names_repeated,
         }
         if self.is_5p:
             stats["cap_positive_reads"] = round(self.cap_positive_reads, self.args.decimals)
@@ -885,17 +918,19 @@ class Counter:
         return stats
 
 
-def write_runs(out, chrom: str, values: np.ndarray, decimals: int) -> None:
-    """Coverage rows: runs of equal non-zero value merged."""
+def write_segment_runs(
+    out, chrom: str, bounds: np.ndarray, values: np.ndarray, decimals: int
+) -> None:
+    """Coverage rows from segments [bounds[i], bounds[i + 1]); equal non-zero runs merged."""
     if values.size == 0:
         return
     change = np.flatnonzero(np.diff(values)) + 1
-    starts = np.concatenate(([0], change))
-    ends = np.concatenate((change, [values.size]))
-    for s, e in zip(starts.tolist(), ends.tolist(), strict=True):
-        value = float(values[s])
+    firsts = np.concatenate(([0], change))
+    lasts = np.concatenate((change, [values.size]))
+    for a, b in zip(firsts.tolist(), lasts.tolist(), strict=True):
+        value = float(values[a])
         if value != 0:
-            out.write(f"{chrom}\t{s}\t{e}\t{format_value(value, decimals)}\n")
+            out.write(f"{chrom}\t{bounds[a]}\t{bounds[b]}\t{format_value(value, decimals)}\n")
 
 
 def nonzero_dict(values: np.ndarray) -> dict[int, float]:
@@ -952,13 +987,45 @@ def main(argv: Sequence[str]) -> None:
         )
     try:
         bam, genome, refs = open_inputs(args)
+    except (OSError, ValueError, EndCountsError) as error:
+        sys.exit(f"degrseq end-counts: error: {error}")
+    try:
         counter = Counter(args, refs, genome)
+        names = array("Q")
         with bam:
             for group in read_groups(bam):
+                names.append(name_hash(group[0].query_name))
                 counter.process(group)
+        counter.read_names_repeated = repeated_names(names)
+        if counter.read_names_repeated:
+            print(
+                f"degrseq end-counts: warning: {counter.read_names_repeated} read name(s) appear "
+                "in more than one run of records and were counted once per run; reads should be "
+                "grouped by name (STAR --outSAMtype BAM Unsorted, or samtools sort -n)",
+                file=sys.stderr,
+            )
         counter.run_multimappers()
-    except EndCountsError as error:
+        counter.write()
+        write_stats(args, counter)
+    except (OSError, EndCountsError) as error:
         sys.exit(f"degrseq end-counts: error: {error}")
-    counter.write()
+    finally:
+        if genome.fasta is not None:
+            genome.fasta.close()
+
+
+def name_hash(name: str) -> int:
+    return int.from_bytes(hashlib.blake2b(name.encode(), digest_size=8).digest(), "little")
+
+
+def repeated_names(names: array) -> int:
+    """Rule 1: names that come back after another name (records not grouped, or reads
+    duplicated in the FASTQ)."""
+    hashes = np.sort(np.frombuffer(names, dtype=np.uint64))
+    repeats = hashes[1:] == hashes[:-1]
+    return int(np.count_nonzero(repeats & ~np.concatenate(([False], repeats[:-1]))))
+
+
+def write_stats(args: argparse.Namespace, counter: "Counter") -> None:
     stats_path = Path(f"{args.prefix}.end-counts.stats.json")
-    stats_path.write_text(json.dumps(counter.stats_json(), indent=2) + "\n")
+    stats_path.write_text(json.dumps(counter.stats_json(), indent=2) + "\n", encoding="utf-8")

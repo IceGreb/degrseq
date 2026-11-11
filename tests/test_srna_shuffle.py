@@ -154,3 +154,10 @@ def test_stats(tmp_path: Path) -> None:
         "seed": 3,
         "n_identical_to_input": 0,
     }
+
+
+def test_missing_output_dir_exits(tmp_path: Path) -> None:
+    path = tmp_path / "srnas.fa"
+    path.write_text(FASTA)
+    with pytest.raises(SystemExit, match="degrseq srna-shuffle: error"):
+        srna_shuffle.main(["--fasta", str(path), "--prefix", str(tmp_path / "no_dir" / "o")])

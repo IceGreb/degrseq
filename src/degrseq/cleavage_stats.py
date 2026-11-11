@@ -120,7 +120,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def iter_tsv(path: str, required: Sequence[str]) -> Iterator[dict[str, str]]:
     opener = gzip.open if path.endswith(".gz") else open
     try:
-        with opener(path, "rt", newline="") as handle:
+        with opener(path, "rt", newline="", encoding="utf-8") as handle:
             reader = csv.DictReader(handle, delimiter="\t", quoting=csv.QUOTE_NONE)
             names = [n.strip() for n in reader.fieldnames or []]
             missing = [c for c in required if c not in names]
@@ -327,7 +327,7 @@ def format_row(row: tuple) -> str:
 
 
 def write_table(path: str, rows: list[tuple]) -> None:
-    with open(path, "w") as out:
+    with open(path, "w", encoding="utf-8") as out:
         out.write("\t".join(HEADER) + "\n")
         out.writelines(format_row(r) for r in rows)
 
@@ -340,7 +340,7 @@ SHUFFLED_HEADER = ("window", "sRNA", "fold.change", "AllenScore")
 
 def write_window_tests(path: str, by_window: dict[int, list[Site]]) -> None:
     """Rule 15: every tested real site per window, with its p-values."""
-    with open(path, "w") as out:
+    with open(path, "w", encoding="utf-8") as out:
         out.write("\t".join(WINDOW_HEADER) + "\n")
         for w in WINDOWS:
             for s in sorted(by_window[w], key=lambda s: (s.srna, s.transcript, s.slice_site)):
@@ -353,7 +353,7 @@ def write_window_tests(path: str, by_window: dict[int, list[Site]]) -> None:
 
 def write_shuffled_values(path: str, rows: list[tuple[int, str, float, float]]) -> None:
     """Rule 15: the shuffled values behind each tested sRNA's p-values."""
-    with open(path, "w") as out:
+    with open(path, "w", encoding="utf-8") as out:
         out.write("\t".join(SHUFFLED_HEADER) + "\n")
         for w, srna, fc, allen in rows:
             out.write(f"{w}\t{srna}\t{r_number(fc)}\t{r_number(allen)}\n")
@@ -445,6 +445,6 @@ def main(argv: Sequence[str]) -> None:
     try:
         stats = run(args)
         stats_path = Path(f"{args.prefix}.cleavage-stats.stats.json")
-        stats_path.write_text(json.dumps(stats, indent=2) + "\n")
+        stats_path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
     except (OSError, CleavageStatsError) as error:
         sys.exit(f"degrseq cleavage-stats: error: {error}")

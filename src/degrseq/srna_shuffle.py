@@ -40,7 +40,7 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
 def read_fasta(path: str) -> list[tuple[str, str]]:
     """Rule 1 and edge cases: (ID, sequence) in input order; multi-line records joined."""
     records: list[tuple[str, list[str]]] = []
-    with open(path) as handle:
+    with open(path, encoding="utf-8") as handle:
         for line in handle:
             line = line.strip()
             if not line:
@@ -102,16 +102,10 @@ def main(argv: Sequence[str]) -> None:
                 file=sys.stderr,
             )
 
-    n_identical = 0
-    sets = shuffled_sets(records, args.n_shuffles, args.seed)
-    if args.layout == "combined":
-        with open(f"{args.prefix}.shuffled.fa", "w") as out:
-            for j, batch in sets:
-                n_identical += write_set(out, j, batch)
-    else:
-        for j, batch in sets:
-            with open(f"{args.prefix}.{j}.shuffled.fa", "w") as out:
-                n_identical += write_set(out, j, batch)
+    try:
+        n_identical = write_sets(args, records)
+    except OSError as error:
+        sys.exit(f"degrseq srna-shuffle: error: {error}")
 
     stats = {
         "schema_version": SCHEMA_VERSION,
@@ -121,4 +115,19 @@ def main(argv: Sequence[str]) -> None:
         "n_identical_to_input": n_identical,
     }
     stats_path = Path(f"{args.prefix}.srna-shuffle.stats.json")
-    stats_path.write_text(json.dumps(stats, indent=2) + "\n")
+    stats_path.write_text(json.dumps(stats, indent=2) + "\n", encoding="utf-8")
+
+
+def write_sets(args: argparse.Namespace, records: list[tuple[str, str]]) -> int:
+    """Rules 2, 4; returns the number of shuffles identical to their input."""
+    n_identical = 0
+    sets = shuffled_sets(records, args.n_shuffles, args.seed)
+    if args.layout == "combined":
+        with open(f"{args.prefix}.shuffled.fa", "w", encoding="utf-8") as out:
+            for j, batch in sets:
+                n_identical += write_set(out, j, batch)
+    else:
+        for j, batch in sets:
+            with open(f"{args.prefix}.{j}.shuffled.fa", "w", encoding="utf-8") as out:
+                n_identical += write_set(out, j, batch)
+    return n_identical

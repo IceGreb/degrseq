@@ -34,7 +34,7 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 ## Rules
 
 ### Reading the BAM
-1. **Grouping.** Consecutive records with the same query name form one read. A header with `SO:coordinate` is an error. If `NH` is present and a group's number of distinct loci (after rule 4) differs from `NH`, the read is still processed with the loci present, and counted as `nh_mismatch`. This is expected after UMI dedup (pipeline G1).
+1. **Grouping.** Consecutive records with the same query name form one read. A header with `SO:coordinate` is an error. If `NH` is present and a group's number of distinct loci (after rule 4) differs from `NH`, the read is still processed with the loci present, and counted as `nh_mismatch`. This is expected after UMI dedup (pipeline G1). A name that comes back after another name (records not adjacent, or a read duplicated in the FASTQ) is still counted once per run, but counted as `read_names_repeated` (distinct names) with a warning (DL-057). nanoPARE's test FASTQs contain such duplicates (1,335 in `test5P_1`, 2,242 in `testBODY_1`), and the original counts them twice, so this is not an error.
 2. **Records used.** Unmapped (0x4), supplementary (0x800), QC-fail (0x200) and duplicate-flagged (0x400) records are ignored. Primary and secondary (0x100) records are both loci (DL-013).
 3. **Strand.** SE: a reverse (0x10) record is on `−`, else `+`. PE: the locus strand is mate 1's strand (rule 17).
 4. **Locus identity.** A locus is keyed by (reference, strand, 5′-end position after rule 7). Records with the same key within one read count once (DL-011). Compat: keyed by alignment start only (#24), separately for primary and secondary records, primary loci listed first (G9). Colliding records (counted in `loci_key_collisions`) form one locus with the first record's reference and strand and the union of their positions; for a unique read each record passes or fails the clip checks on its own and only passing records add positions. Golden fixture: 127 collisions in 5P, mostly one read's alignments at one start with different introns.
@@ -44,13 +44,13 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 6. **Reclaim (5P only).** For each soft-clip adjacent to the alignment, walk outward from the alignment edge base by base. A clipped base is reclaimed (treated as templated and aligned) while it equals the genome base at the corresponding position (case-insensitive; `N` never matches). Stop at the first non-matching base or the reference end. The bases left over, from that point to the read end, are **untemplated**.
 7. **5′ end.** `+`: the leftmost aligned-or-reclaimed position. `−`: the rightmost. The 5′-side untemplated bases are those beyond it (read start for `+`, read end for `−`, in read orientation).
 8. **Untemplated non-G at the 5′ side → locus unusable (5P).** If any 5′-side untemplated base is not `G` (after reverse-complementing for `−`), the locus is unusable (DL-009; kept after G8, DL-035). Counted as `loci_untemplated_non_g`; a read with no usable locus left is counted under `discarded_untemplated_non_g`.
-9. **Untemplated bases at the 3′ side only (5P).** These are ignored; the locus stays usable (DL-010). Reads with such a locus are counted as `kept_3prime_clip_only`. Compat: the locus is unusable.
+9. **Untemplated bases at the 3′ side only (5P).** These are ignored; the locus stays usable (DL-010). Reads with such a locus are counted as `kept_3prime_clip_only`, only if the read is counted (not when `--multimapper_mode unique` drops it, DL-057). Compat: the locus is unusable.
 10. **Cap signature (5P).** A usable locus is cap-positive if it has ≥ 1 untemplated 5′-side `G` (DL-008). The run length (number of untemplated G's) goes into the stats histogram (rule 26).
 11. **Minimum length.** A locus is usable only if its aligned positions (rule 5) plus reclaimed bases (rule 6) total ≥ `--min_aligned` (default 16), for unique and multimapped reads alike (DL-007). Counted as `loci_too_short`; a read with no usable locus is `discarded_too_short`. Compat: unique reads need `> 16` (reclaim-aware); multimapper loci need `≥ 16` CIGAR positions only.
 12. **Discard precedence.** A read with no usable locus is counted under exactly one reason, checked in this order: `too_short`, `untemplated_non_g`, `3prime_clip_only` (compat only).
 
 ### Weights
-13. **Read weight.** `w` = the `XW` tag (float) if present on the read's records, else 1. The same `w` applies to ends, cap and coverage (DL-016). Records of one read with different `XW` values → error.
+13. **Read weight.** `w` = the `XW` tag (float) if present on the read's records, else 1. The same `w` applies to ends, cap and coverage (DL-016). Records of one read with different `XW` values → error. `XW` must be finite and ≥ 0, else error (DL-057).
 
 ### Unique reads
 14. **Unique read** = exactly one usable locus. It adds `w` to the ends track at its 5′ end, `w` to the cap track at its 5′ end if cap-positive (5P), and `w` to coverage at every aligned and reclaimed position.
@@ -61,7 +61,7 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
     - `rescue` (default): rules 18–20;
     - `uniform`: share `1/k` to each of the k loci;
     - `unique`: multimapped reads are dropped (counted `multimapped_dropped`).
-17. **Paired-end.** A locus is a mate-1 record plus the mate-2 record with the same `HI` tag. The 5′ end, strand and cap come from mate 1. Coverage is added from both mates. A locus without an aligned mate 1 is unusable (DL-017).
+17. **Paired-end.** A locus is a mate-1 record plus the mate-2 record with the same `HI` tag; if any record of the read lacks `HI`, mates are paired by mate position (RNEXT/PNEXT) instead (DL-057). `--min_aligned` (rule 11) is checked on the positions of both mates together, as in the original (B3, DL-062). The 5′ end, strand and cap come from mate 1. Coverage is added from both mates. A locus without an aligned mate 1 is unusable (DL-017).
 18. **Rescue weight of a locus** = the sum of current same-strand coverage over the locus's aligned and reclaimed positions.
     - BODY only: if every locus of the read has same-strand weight 0, opposite-strand coverage over the same positions is used.
     - If all weights are still 0: equal split (counted `multimapped_naive`), else counted `multimapped_rescued`.
@@ -83,7 +83,7 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 22. **Cap track (5P):** the per-nt sums of the cap contributions, at the 5′-end coordinate (DL-008). Compat: per untemplated G, at each G's own coordinate, from both clips (#34): +1 unweighted for unique reads, recorded before the length check (#33); multimappers weighted by count × share × `w` (#8, #26).
 23. **Rounding.** Values are rounded to `--decimals` (default 4; compat fixed at 2, `--decimals` is an error, DL-047) with Python `round()`. Rows whose rounded value is 0 are not written. Values are printed without trailing zeros (`1`, `0.5`, `0.3333`) (DL-014). Compat format: 2 decimals, Python `round()` repr (`1.0`), equal adjacent values merged into one row (G4).
 24. **Determinism.** Output is byte-identical across runs and `PYTHONHASHSEED`. Accumulation is single-threaded, in the order defined by rules 14 and 20, in float64.
-25. **Coverage files:** only with `--write_coverage` (DL-015). Compat: a memory warning is printed to stderr; coverage is built one reference and strand at a time, adding in read order (DL-047). Positions past the end of the locus's reference are skipped; they occur only when records on different references merge (rule 4, #24) (DL-048).
+25. **Coverage files:** only with `--write_coverage` (DL-015). Compat: a memory warning is printed to stderr; coverage is built one reference and strand at a time, adding in read order (DL-047). Positions past the end of the locus's reference are skipped; they occur only when records on different references merge (rule 4, #24) (DL-048). Default: built from interval breakpoints, so memory follows the number of intervals, not chromosome length; output identical to a per-base array (DL-057).
 
 ### Stats
 26. See Stats file. Every read in the BAM is counted under exactly one fate.
@@ -91,6 +91,8 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 ## Edge cases
 - **Empty BAM, or no usable reads:** empty bedgraphs (0 bytes) and a stats file with zeros; exit 0.
 - **Reference in the BAM but not in the FASTA, or a length mismatch:** error before reading any records.
+- **Alignment past the reference end:** error (default; DL-057). Compat: coverage positions past the end are skipped (rule 25).
+- **Missing input file or output folder:** `degrseq end-counts: error: …`, no traceback.
 - **Soft-clip reaching the reference start or end:** reclaim stops there (rule 6); the remaining bases are untemplated.
 - **5′ end at position 0:** valid. The cap is at the 5′-end coordinate, so it never goes negative (in compat, a −1 position is dropped and counted).
 - **Read entirely soft-clipped after alignment (`0M`):** cannot occur from STAR; error if seen.
@@ -146,7 +148,7 @@ Not ported: `--secondary` (always on), `--weighted` (automatic when `XW` present
   - `discarded_flagged` (approved 21/10, DL-037: reads whose records are all removed by rule 2 but not all unmapped, e.g. duplicate- or QC-fail-flagged);
   - `discarded_no_mate1` (approved 21/10, DL-037: PE reads whose only loci lack an aligned mate 1, rule 17).
 - **Loci:** `loci_too_short`, `loci_untemplated_non_g`, `loci_no_mate1` (approved 21/10), `loci_key_collisions` (compat).
-- **Other:** `kept_3prime_clip_only`, `nh_mismatch`.
+- **Other:** `kept_3prime_clip_only`, `nh_mismatch`, `read_names_repeated` (DL-057).
 - **5P only:** `cap_positive_reads` (weighted sum) and `untemplated_g_run_length` histogram `{0, 1, 2, 3, ≥4}` over usable loci of unique reads. For GenXPro reads after normalisation this checks that the TSO GGG was removed.
 
 ## Tests

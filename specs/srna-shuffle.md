@@ -41,6 +41,7 @@ specifically.
 ## Edge cases
 - Empty sequence → error naming the record (the original wrote an empty sequence line).
 - Duplicate IDs → error (shuffled IDs would collide downstream).
+- Missing input file or output folder → `degrseq srna-shuffle: error: …`, no traceback (DL-057).
 - Header with a description (`>id desc`) → ID only. The original appended `_shuffled_j` after
   the whole header line, so the suffix landed after the description.
 - Characters outside `ACGTUN` (any case) → warning, shuffled as-is.

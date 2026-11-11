@@ -25,12 +25,37 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   original's outputs on it. Pre-commit whitespace hooks skip `tests/fixtures/` so fixtures stay byte-exact;
   `.gitignore` ignores `golden/` and `scratch/` only at the repo root, so fixture folders are tracked.
 
+- `end-counts`: paired-end `--min_aligned` counts both mates' positions, as nanoPARE does (DL-062); test added.
+
 - `srna-shuffle`: shuffled sRNA sets for the cleavage null model (`--n_shuffles`, `--seed`,
   `--layout combined|per_set`), stats JSON. Implements `specs/srna-shuffle.md`.
 
 - `cleavage-stats`: significant sRNA cleavage sites from real vs shuffled-sRNA step-1 tables
   (empirical p-values, Fisher, BH, window join), `--nanopare_compat`, stats JSON.
   Implements `specs/cleavage-stats.md`.
+
+- `scale-factor`: the 5P-vs-BODY scale factor for EndGraph (`factor × 5P − BODY`), from gene regions
+  (BED6) and ends bedgraphs; `--fraglen`, `--body_strand`, `--max_scale_factor`, `--write_genes`, stats JSON.
+  Implements `specs/scale-factor.md` (DL-063). Deliberate differences from nanoPARE: no compat mode
+  (DL-058); per-gene BODY counts are counts with shared positions split, not density × length (known
+  issues 44, 45); last gene of a chromosome included (#43); gene length = region size (DL-059); empty
+  totals are an error (DL-060); factor printed with 4 fixed decimals. On nanoPARE's test set:
+  0.3871 / 0.1903 / 0.2103 vs the original's 0.3924 / 0.2100 / 0.2121. Fixture
+  `tests/fixtures/scale_factor_test_set/` (1.5 MB, gzipped).
+
+### Fixed (external code review of `cb08476`, 30/10)
+- `end-counts`: an alignment past the reference end is an error, not a crash in
+  `--write_coverage`; `XW` must be finite and ≥ 0; paired-end reads with `HI` on only some
+  records pair mates by position; `kept_3prime_clip_only` no longer counts reads dropped by
+  `--multimapper_mode unique`; mate sequences are kept apart in block identity; clean errors
+  for missing inputs and output folders (also `srna-shuffle`); separate messages for
+  `--min_aligned` and `--decimals`; the FASTA is closed.
+- `end-counts`: read names that come back after another name are counted in stats
+  (`read_names_repeated`) and warned about; counting is unchanged.
+- `end-counts --write_coverage` (default) uses memory proportional to the intervals, not the
+  chromosome length; multimapper rescue and coverage no longer scan every interval per
+  reference. Output unchanged.
+- All outputs are written as UTF-8.
 
 ### Differences from nanoPARE (`srna-shuffle`)
 

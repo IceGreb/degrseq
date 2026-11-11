@@ -1,0 +1,13 @@
+f83ac6142fe0c3327a27c023ba542512  input/flower_1.5P.minus_mask.bedgraph.gz
+fae9258047acbff4e832100d3312c4cf  input/flower_1.5P.plus_mask.bedgraph.gz
+26b26bb4053106171fac6408bc5df489  input/flower_1.BODY.minus.bedgraph.gz
+8f92ab3dbb3d6bfed9199c11366d74ee  input/flower_1.BODY.plus.bedgraph.gz
+d4e85f622b11d582a6ad6b73d2e4cff3  input/flower_2.5P.minus_mask.bedgraph.gz
+b90cfdd53431fbad9f6feb52249dcaed  input/flower_2.5P.plus_mask.bedgraph.gz
+72aa823472c475543e103a69eebf25bf  input/flower_2.BODY.minus.bedgraph.gz
+7f91818ce4c3bd123fd718f4b2888a7e  input/flower_2.BODY.plus.bedgraph.gz
+22d25d2ff8447e35c6bcc5c70c3eabe5  input/flower_3.5P.minus_mask.bedgraph.gz
+6a41cf3eb654e94da72c3f394b65438e  input/flower_3.5P.plus_mask.bedgraph.gz
+0080f5073834cd848b4864dbbafe27fe  input/flower_3.BODY.minus.bedgraph.gz
+420455e37578f6540f77693045281217  input/flower_3.BODY.plus.bedgraph.gz
+af175fa1a8a74ae3e6de269cf26b3591  input/regions.bed.gz

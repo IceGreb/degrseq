@@ -335,6 +335,18 @@ def test_paired_end_five_prime_end_from_mate1(tmp_path: Path) -> None:
     assert cov == "chr1\t100\t120\t1\nchr1\t150\t170\t1\n"
 
 
+def test_paired_end_min_aligned_counts_both_mates(tmp_path: Path) -> None:
+    def pair(name: str, len1: int, len2: int) -> list[str]:
+        return [
+            sam(name, 99, "chr1", 100, f"{len1}M", tags="NH:i:1\tHI:i:1"),
+            sam(name, 147, "chr1", 150, f"{len2}M", tags="NH:i:1\tHI:i:1"),
+        ]
+
+    result = run(tmp_path, [*pair("a", 10, 6), *pair("b", 10, 5)])
+    assert fates(result) == {"unique": 1, "discarded_too_short": 1}
+    assert result[("ends", "+")] == {("chr1", 100): "1"}
+
+
 def test_paired_end_locus_without_mate1_is_unusable(tmp_path: Path) -> None:
     records = [
         sam("p", 137, "chr1", 100, "20M", tags="NH:i:1\tHI:i:1"),
@@ -457,3 +469,83 @@ def test_stats_schema(tmp_path: Path) -> None:
         "nanopare_compat": False,
     }
     json.dumps(stats)
+
+
+# Fixes from the external code review (30/10/2026)
+def mate(line: str, rnext_pos: int) -> str:
+    """Set RNEXT/PNEXT of a sam() line (0-based mate position)."""
+    return line.replace("\t*\t0\t0\t", f"\t=\t{rnext_pos + 1}\t0\t", 1)
+
+
+def test_alignment_past_reference_end_exits(tmp_path: Path) -> None:
+    with pytest.raises(SystemExit, match="past the end of chr1"):
+        run(tmp_path, [sam("r", 0, "chr1", CHROM_LENGTH - 10, "20M")])
+
+
+def test_repeated_read_name_warned_and_counted(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    records = [unique("a", 60), unique("b", 100), unique("a", 60)]
+    result = run(tmp_path, records)
+    assert result["stats"]["read_names_repeated"] == 1
+    assert result["stats"]["reads_total"] == 3
+    assert "1 read name(s) appear in more than one run" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("value", ["-1", "nan", "inf"])
+def test_bad_xw_exits(tmp_path: Path, value: str) -> None:
+    with pytest.raises(SystemExit, match="XW must be finite"):
+        run(tmp_path, [sam("x", 0, "chr1", 60, "20M", tags=f"NH:i:1\tXW:f:{value}")])
+
+
+def test_paired_end_mixed_hi_tags_pair_by_position(tmp_path: Path) -> None:
+    records = [
+        mate(sam("p", 99, "chr1", 100, "20M", tags="NH:i:1\tHI:i:1"), 150),
+        mate(sam("p", 147, "chr1", 150, "20M", tags="NH:i:1"), 100),
+    ]
+    result = run(tmp_path, records)
+    assert fates(result) == {"unique": 1}
+    assert result["stats"]["nh_mismatch"] == 0
+
+
+def test_block_identity_keeps_mates_apart() -> None:
+    def segment(seq: str, flag: int) -> pysam.AlignedSegment:
+        record = pysam.AlignedSegment()
+        record.query_sequence, record.flag = seq, flag
+        return record
+
+    a = end_counts.read_sequences([segment("AC", 65), segment("GT", 129)])
+    b = end_counts.read_sequences([segment("A", 65), segment("CGT", 129)])
+    assert a != b
+    assert "".join(a) == "".join(b)
+
+
+def test_three_prime_clip_not_counted_for_dropped_reads(tmp_path: Path) -> None:
+    seq = "A" * 20 + "G"
+    records = [
+        sam("m", 0, "chr1", 60, "20M1S", seq, tags="NH:i:2"),
+        sam("m", 256, "chr1", 160, "20M1S", seq, tags="NH:i:2"),
+    ]
+    result = run(tmp_path, records, extra=["--multimapper_mode", "unique"])
+    assert fates(result) == {"multimapped_dropped": 1}
+    assert result["stats"]["kept_3prime_clip_only"] == 0
+
+
+def test_missing_inputs_exit_cleanly(tmp_path: Path) -> None:
+    bam, fasta = build_inputs(tmp_path, [unique("u", 60)])
+    for bam_path, prefix in ((tmp_path / "none.bam", tmp_path / "o"), (bam, tmp_path / "x" / "o")):
+        args = ["--bam", str(bam_path), "--fasta", str(fasta), "--prefix", str(prefix)]
+        with pytest.raises(SystemExit, match="degrseq end-counts: error"):
+            end_counts.main([*args, "--library", "5P"])
+
+
+@pytest.mark.parametrize(
+    ("flag", "message"),
+    [("--min_aligned", "--min_aligned must be >= 1"), ("--decimals", "--decimals must be >= 0")],
+)
+def test_parameter_errors_named(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str], flag: str, message: str
+) -> None:
+    with pytest.raises(SystemExit):
+        run(tmp_path, [unique("u", 60)], extra=[flag, "-1"])
+    assert message in capsys.readouterr().err
