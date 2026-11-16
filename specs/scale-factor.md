@@ -1,6 +1,6 @@
 # `scale-factor`: behavioural spec
 
-Status: **approved** (11/11/2026, DL-063; D1–D4 decided 10/11, DL-058–DL-061) · Replaces (nanoPARE 6264d6f): `scripts/python_scripts/gtf_quantify.py` (×2) + `endgraph_ratio.py`, called at `endGraph.sh` l.212–232; cap at l.243–247
+Status: **approved** (11/11/2026, DL-063; D1–D4 decided 10/11, DL-058–DL-061) · **amendment pending approval (16/11, DL-069: `--body_strand unstranded`)** · Replaces (nanoPARE 6264d6f): `scripts/python_scripts/gtf_quantify.py` (×2) + `endgraph_ratio.py`, called at `endGraph.sh` l.212–232; cap at l.243–247
 Pipeline module: `modules/local/scale_factor/` · Audit: `nanopare_nfcore_design/answers/10_11_2026_scale_factor_audit.md`
 
 ## Purpose
@@ -23,7 +23,7 @@ A bedgraph row spanning n nt contributes its value at each of its n positions (m
 | `<prefix>.scale-factor.genes.tsv` | only with `--write_genes`: header `gene_id length end body`; one row per gene in `--regions`, sorted by gene_id (bytewise); end and body split by rule 4, 4 fixed decimals | none (QC) |
 
 ## Rules
-1. **Sense strand.** A gene on `+` is matched with `ends_plus`. With `--body_strand reverse` (default) it is matched with `body_minus`, and a `−` gene with `body_plus`; with `forward`, with `body_plus` / `body_minus` respectively.
+1. **Sense strand.** A gene on `+` is matched with `ends_plus`. With `--body_strand reverse` (default) it is matched with `body_minus`, and a `−` gene with `body_plus`; with `forward`, with `body_plus` / `body_minus` respectively; with `unstranded` (amendment, DL-069), genes on both strands are matched with `body_plus + body_minus` summed per nt.
 2. **Ownership.** A position (chrom, strand, nt) is owned by every gene whose region covers it on that strand.
 3. **Totals.** E = sum of 5P values at owned positions; B = sum of sense BODY values at owned positions. Each position counts once, however many genes own it. Values outside every region are ignored. Sums are exact (`math.fsum`), so they do not depend on row order.
 4. **Per-gene BODY counts.** b(g) = sum over g's positions of the BODY value divided by the number of owners of that position.
@@ -47,7 +47,7 @@ A bedgraph row spanning n nt contributes its value at each of its n positions (m
 | 44 | residual reset inside the loop | fix by not having the step (D1) | 0.3924/0.2100/0.2121 → 0.3920/0.2001/0.2127 for this bug alone |
 | 45 | per-gene reads = density × full length; totals inflated (BODY up to +22.6 %) | fix: counts, not densities (rules 3–4) | 0.3871 / 0.1903 / 0.2103 (−1.4 / −9.4 / −0.8 %) |
 | 46 | gene = ID before `.`, isoforms by substring | not carried over: gene = `gene_id` from the regions BED | none on the test set |
-| 47 | `flip_5p` hard-coded (BODY antisense) | parameter `--body_strand`, default `reverse` = original | none |
+| 47 | `flip_5p` hard-coded (BODY antisense) | parameter `--body_strand`, default `reverse` = original; also `forward`, `unstranded` (DL-069) | none |
 | — | gene length = longest isoform + 200 (inherited from the general gene-level TPM code, eac817b) | region size (DL-059) | ~1 %: longest + 200 would give 0.3904 / 0.1919 / 0.2121 |
 | — | `round()` repr (`0.21`) | 4 fixed decimals (`0.2100`) | text only; value equal |
 
@@ -55,7 +55,7 @@ A bedgraph row spanning n nt contributes its value at each of its n positions (m
 | Flag | Default | Original equivalent |
 |---|---|---|
 | `--fraglen` | 200 | `--fraglen` / `FRAGLEN` |
-| `--body_strand` | `reverse` | `flip_5p="true"` (hard-coded) |
+| `--body_strand` | `reverse` (`reverse` / `forward` / `unstranded`) | `flip_5p="true"` (hard-coded) |
 | `--max_scale_factor` | 10 | `SCALE_CAP=10` (hard-coded) |
 | `--write_genes` | off | — (the original writes per-gene quant tables always) |
 | `--prefix` | required | `$SAMPLE_NAME` |
@@ -65,7 +65,7 @@ A bedgraph row spanning n nt contributes its value at each of its n positions (m
 `schema_version`, `fraglen`, `body_strand`, `max_scale_factor`, `end_total` (E), `body_total` (B), `mean_gene_length` (L̄), `genes_in_regions`, `genes_with_body`, `raw_factor`, `scale_factor`, `capped` (bool), `values_outside_regions` (5P and BODY, separately), `chromosomes_without_regions`.
 
 ## Tests
-- Unit: one per rule; strand matching both ways; shared position split between 2 and 3 genes (rule 4) but counted once in E/B (rule 3); cap hit; input row order shuffled → same output; each edge case.
+- Unit: one per rule; strand matching all three ways (`unstranded`: a BODY read on either strand counts for genes on both strands; a position owned by a `+` and a `−` gene counts once per strand in B); shared position split between 2 and 3 genes (rule 4) but counted once in E/B (rule 3); cap hit; input row order shuffled → same output; each edge case.
 - Golden: none in compat (DL-058). Default checked against the audit's measured values on the test set: 0.3871 / 0.1903 / 0.2103, and E/B equal to 138,729 / 160,859 (flower_1; the audit's instrumented original saw 160,857 because it drops AT2G40740, 2 BODY reads, quirk 43), 214,506 / 121,465 (flower_2), 219,022 / 139,615 (flower_3), within 1 read (bedgraph values have 2 dp).
 - Downstream golden tests (`kde-peaks`) take the golden factors 0.3924 / 0.2100 / 0.2121 as input.
 

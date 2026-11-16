@@ -22,7 +22,7 @@ Numbered, exact, testable statements. Each rule gets at least one unit test.
 1. …
 
 ## Edge cases
-Empty input, ties, position 0, chromosome ends, missing IDs, … and the required behaviour for each.
+Empty input, ties, position 0, chromosome ends, missing IDs, IDs with regex metacharacters such as `Su(var)3-9` (DL-064), … and the required behaviour for each.
 
 ## Quirks of the original
 | # (known_issues) | Original behaviour | Decision: fix / reproduce / fix + `--nanopare_compat` | Expected diff vs golden |
