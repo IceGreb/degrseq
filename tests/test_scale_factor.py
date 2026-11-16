@@ -65,6 +65,30 @@ def test_body_strand(tmp_path: Path) -> None:
     assert fwd["stats"]["body_total"] == 40
 
 
+# Rule 1 (DL-069): unstranded sums both BODY strands for genes on either strand
+def test_body_strand_unstranded(tmp_path: Path) -> None:
+    kwargs = {"body_plus": "chr1\t50\t51\t40\n", "body_minus": "chr1\t50\t51\t20\n"}
+    result = run(tmp_path, **kwargs, extra=["--body_strand", "unstranded"])
+    assert result["stats"]["body_total"] == 60
+    assert result["stats"]["body_strand"] == "unstranded"
+    assert genes(result)["gA"][2] == 60
+
+
+# Rule 1 (DL-069): overlapping + and - genes each get the summed BODY value
+def test_body_strand_unstranded_antisense_overlap(tmp_path: Path) -> None:
+    regions = REGIONS + "chr1\t0\t100\tgM\t0\t-\n"
+    result = run(
+        tmp_path,
+        regions=regions,
+        ends_minus="chr1\t7\t8\t5\n",
+        body_plus="chr1\t50\t51\t40\n",
+        extra=["--body_strand", "unstranded"],
+    )
+    g = genes(result)
+    assert g["gA"][2] == 60 and g["gM"][2] == 60
+    assert result["stats"]["body_total"] == 120
+
+
 def test_minus_gene_strand_matching(tmp_path: Path) -> None:
     result = run(
         tmp_path,

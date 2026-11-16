@@ -1,6 +1,6 @@
 # `kde-peaks`: behavioural spec
 
-Status: **draft** (16/11/2026; D1–D4 decided 16/11, DL-065–DL-068; `unstranded` DL-069; G1 DL-071) · Replaces (nanoPARE 6264d6f): `bedgraph_combine.py` (subtraction) `endGraph.sh` l.255–263, `bedgraph_kernel_density.py` l.277–294, `bedgraph_thresh_to_bed.py` l.296–312, strand merge + `bedtools sort` l.316–323, `bed_find_peaks.py -V rpm` l.325–331, RPM filter l.333; bandwidth cap l.249–253
+Status: **approved** (16/11/2026, DL-072; D1–D4 decided 16/11, DL-065–DL-068; `unstranded` DL-069; G1 DL-071) · Replaces (nanoPARE 6264d6f): `bedgraph_combine.py` (subtraction) `endGraph.sh` l.255–263, `bedgraph_kernel_density.py` l.277–294, `bedgraph_thresh_to_bed.py` l.296–312, strand merge + `bedtools sort` l.316–323, `bed_find_peaks.py -V rpm` l.325–331, RPM filter l.333; bandwidth cap l.249–253
 Pipeline module: `modules/local/kde_peaks/` · Audit: `nanopare_nfcore_design/answers/12_11_2026_kde-peaks_audit.md`
 
 ## Purpose

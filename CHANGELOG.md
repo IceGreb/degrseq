@@ -42,6 +42,8 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   totals are an error (DL-060); factor printed with 4 fixed decimals. On nanoPARE's test set:
   0.3871 / 0.1903 / 0.2103 vs the original's 0.3924 / 0.2100 / 0.2121. Fixture
   `tests/fixtures/scale_factor_test_set/` (1.5 MB, gzipped).
+- `scale-factor --body_strand unstranded`: BODY plus + minus summed per nt as background for genes on both strands,
+  for unstranded BODY libraries (DL-069). Default `reverse` unchanged (= nanoPARE's hard-coded flip).
 
 ### Fixed (external code review of `cb08476`, 30/10)
 - `end-counts`: an alignment past the reference end is an error, not a crash in

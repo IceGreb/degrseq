@@ -1,6 +1,6 @@
 # `scale-factor`: behavioural spec
 
-Status: **approved** (11/11/2026, DL-063; D1–D4 decided 10/11, DL-058–DL-061) · **amendment pending approval (16/11, DL-069: `--body_strand unstranded`)** · Replaces (nanoPARE 6264d6f): `scripts/python_scripts/gtf_quantify.py` (×2) + `endgraph_ratio.py`, called at `endGraph.sh` l.212–232; cap at l.243–247
+Status: **approved** (11/11/2026, DL-063; D1–D4 decided 10/11, DL-058–DL-061) · amendment approved and implemented 16/11 (DL-069: `--body_strand unstranded`) · Replaces (nanoPARE 6264d6f): `scripts/python_scripts/gtf_quantify.py` (×2) + `endgraph_ratio.py`, called at `endGraph.sh` l.212–232; cap at l.243–247
 Pipeline module: `modules/local/scale_factor/` · Audit: `nanopare_nfcore_design/answers/10_11_2026_scale_factor_audit.md`
 
 ## Purpose

@@ -1,6 +1,6 @@
 """Scale factor for 5P vs BODY subtraction (EndGraph).
 
-Implements specs/scale-factor.md (approved 11/11/2026).
+Implements specs/scale-factor.md (approved 11/11/2026; `unstranded` amendment 16/11, DL-069).
 """
 
 import argparse
@@ -52,7 +52,9 @@ def parse_args(argv: Sequence[str]) -> argparse.Namespace:
     parser.add_argument("--body_minus", required=True, help="BODY ends bedgraph, minus strand")
     parser.add_argument("--regions", required=True, help="gene regions, BED6")
     parser.add_argument("--fraglen", type=float, default=200)
-    parser.add_argument("--body_strand", choices=("reverse", "forward"), default="reverse")
+    parser.add_argument(
+        "--body_strand", choices=("reverse", "forward", "unstranded"), default="reverse"
+    )
     parser.add_argument("--max_scale_factor", type=float, default=10)
     parser.add_argument("--write_genes", action="store_true", help="write per-gene table")
     parser.add_argument("--prefix", required=True, help="output file prefix")
@@ -187,12 +189,15 @@ def compute(
     ends, body = Tally(), Tally()
     tally_bedgraph(args.ends_plus, "+", segments, ends, unknown, known)
     tally_bedgraph(args.ends_minus, "-", segments, ends, unknown, known)
-    # rule 1: reverse = BODY aligned antisense to the gene
-    body_for = {"+": args.body_minus, "-": args.body_plus}
+    # rule 1: reverse = BODY aligned antisense to the gene; unstranded = both BODY strands (DL-069)
+    body_for = {"+": [args.body_minus], "-": [args.body_plus]}
     if args.body_strand == "forward":
-        body_for = {"+": args.body_plus, "-": args.body_minus}
+        body_for = {"+": [args.body_plus], "-": [args.body_minus]}
+    elif args.body_strand == "unstranded":
+        body_for = {s: [args.body_plus, args.body_minus] for s in ("+", "-")}
     for strand in ("+", "-"):
-        tally_bedgraph(body_for[strand], strand, segments, body, unknown, known)
+        for path in body_for[strand]:
+            tally_bedgraph(path, strand, segments, body, unknown, known)
 
     end_total = math.fsum(ends.total)
     body_total = math.fsum(body.total)
