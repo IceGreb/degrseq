@@ -1,6 +1,6 @@
 # `kde-peaks`: behavioural spec
 
-Status: **approved** (16/11/2026, DL-072; D1–D4 decided 16/11, DL-065–DL-068; `unstranded` DL-069; G1 DL-071) · Replaces (nanoPARE 6264d6f): `bedgraph_combine.py` (subtraction) `endGraph.sh` l.255–263, `bedgraph_kernel_density.py` l.277–294, `bedgraph_thresh_to_bed.py` l.296–312, strand merge + `bedtools sort` l.316–323, `bed_find_peaks.py -V rpm` l.325–331, RPM filter l.333; bandwidth cap l.249–253
+Status: **approved** (16/11/2026, DL-072; implemented 16/11, DL-073; D1–D4 decided 16/11, DL-065–DL-068; `unstranded` DL-069; G1 DL-071) · Replaces (nanoPARE 6264d6f): `bedgraph_combine.py` (subtraction) `endGraph.sh` l.255–263, `bedgraph_kernel_density.py` l.277–294, `bedgraph_thresh_to_bed.py` l.296–312, strand merge + `bedtools sort` l.316–323, `bed_find_peaks.py -V rpm` l.325–331, RPM filter l.333; bandwidth cap l.249–253
 Pipeline module: `modules/local/kde_peaks/` · Audit: `nanopare_nfcore_design/answers/12_11_2026_kde-peaks_audit.md`
 
 ## Purpose
@@ -40,8 +40,8 @@ Consumer: EndClass (pipeline replicate merge, then `cap-class`). It uses only th
 
 ## Rules
 1. **Pairing.** 5P plus is paired with BODY minus and 5P minus with BODY plus (`--body_strand reverse`, default); with `forward`, plus with plus and minus with minus; with `unstranded`, both 5P strands are paired with BODY plus + BODY minus summed per nt (DL-069). Same parameter and meaning as `scale-factor`.
-2. **Difference.** Per chromosome, strand and nt: d = S × E − B, where S is the scale factor, E the 5P value and B the paired BODY value (0 where absent). Default: exact (no rounding). Compat: each d is rounded to 2 decimals (Python `round`) before rule 4, and a chromosome-strand whose only non-zero d is at position 0 contributes nothing (quirk 37).
-3. **Kernel.** W = `--kernel_extent` × H, where H = `--bandwidth`. Weights k(x) = exp(−|x| / H) for integer x = −W … +W, normalised to sum 1 over these 2W + 1 values. Default: all 2W + 1 weights are used. Compat: the weight at x = +W is not used (the others are not renormalised; quirk 10). Precision: see G1.
+2. **Difference.** Per chromosome, strand and nt: d = S × E − B, where S is the scale factor, E the 5P value and B the paired BODY value (0 where absent). Default: exact (no rounding). Compat: each d is rounded to 2 decimals (Python `round`) before rule 4, and a chromosome-strand whose only covered position (by a row of either input) is position 0 contributes nothing (quirk 37).
+3. **Kernel.** W = `--kernel_extent` × H, where H = `--bandwidth`. Weights k(x) = exp(−|x| / H) for integer x = −W … +W, normalised to sum 1 over these 2W + 1 values. Default: all 2W + 1 weights are used, in double precision. Compat: exp(−|x| / H) is evaluated in single precision, then divided by 2H and normalised in double precision, and the weight at x = +W is not used (the others are not renormalised; quirk 10). Single precision is needed for byte parity: with double-precision weights, one flower_3 density value differs in the 3rd decimal (436.112 vs 436.111; DL-073).
 4. **Density.** D(p) = Σₓ d(x) · k(p − x) over all nt x of the same chromosome and strand. Negative d lowers the density. D is computed for 0 ≤ p < chromosome length. Compat: for p ≥ 0 without the upper bound (quirk 11). Positions p < 0 are never reported (both modes).
 5. **Rounding of the density.** D is rounded to `--decimals` (3) decimals. A position is **positive** if its rounded D > 0. The rounded values are what rules 6–7 use and what `--write_density` writes. This rounding is kept in default mode because it sets the detection limit: without it, every feature would extend to the kernel's full reach (DL-066).
 6. **Features.** A feature is a maximal run of consecutive positive positions on one chromosome and strand with length ≥ `--min_length`. Start = its first position. End = last + 1 (compat: last; quirk 12). Names: n counts this strand's features on this chromosome from 1 in ascending start order, before RPM filtering, so kept features may have gaps in n.
@@ -77,7 +77,7 @@ Consumer: EndClass (pipeline replicate merge, then `cap-class`). It uses only th
 | 12 | BED end = last position; last nt left out of RPM and dominant position | fix + compat (DL-065) | all features + 1 nt; kept + 5 / + 8 / + 5; replicable 602 → 607 |
 | 13 | RPM denominator = int(2 × plus total) | fix + compat (DL-065) | RPM values change; kept set unchanged (the filter removes only 0-read features here) |
 | 37 | subtraction: a chromosome-strand with its only value at position 0 gets no row | fix + compat | none |
-| — | difference rounded to 2 decimals before smoothing | default exact; compat rounds (DL-066) | G3 |
+| — | difference rounded to 2 decimals before smoothing | default exact; compat rounds (DL-066) | kept + 3 / 0 / + 2; coordinate lines differing 103 / 2 / 158 (mostly 1-nt edges); replicable 606 → 608 |
 | — | chromosome missing from the length table: crash or silent drop | error in both modes | none on valid input |
 | 14 | Gaussian kernel width = H√2 | not carried over: Laplace only (DL-068) | none (Laplace is the default) |
 | 47 | BODY strand flip hard-coded | `--body_strand` `reverse` (default, = original) / `forward` / `unstranded` | none |
@@ -85,7 +85,7 @@ Consumer: EndClass (pipeline replicate merge, then `cap-class`). It uses only th
 | — | README says default RPM 5 "for test data"; script default 0.5 | 0.5 (script, golden run) | none |
 | — | number repr (`14.0`, `5.14`) | fixed decimals in default; repr in compat | text only |
 
-With all of quirks 10–13 fixed together: replicable features 602 → 606 (+0.7 %).
+With all of quirks 10–13 fixed together: replicable features 602 → 606 (+0.7 %); with the exact difference as well (default mode): 608. Default mode, features called / kept: flower_1 1,090 / 982, flower_2 1,283 / 1,126, flower_3 1,219 / 1,054 (`tests/test_kde_peaks_golden.py`).
 
 ## Parameters
 | Flag | Default | Original equivalent |
@@ -127,10 +127,11 @@ With all of quirks 10–13 fixed together: replicable features 602 → 606 (+0.7
 - **Default vs golden:** the difference must be exactly the quirk table: the 5 kept-feature gains from quirk 12, the shifts from quirk 10, and G3's measured effect.
 
 ## Open
-- **G1, kernel precision (procedure decided, DL-071).** The original's weights are single precision; double precision differs by ≤ 2.7 × 10⁻⁹ per weight, which can flip a density's 3rd decimal only next to a rounding boundary. Implement in double precision; if the compat golden test fails only through such flips, compat uses single-precision weights and this item records it. Does not block approval.
-- **G2, tie order.** The original orders rows with equal chromosome and start by `bedtools sort`, which leaves their order undefined: the 3 pre-filter ties on the test set come out in 3 different patterns. Proposal: compat uses rule 11's order, and the golden test compares after sorting both files by chromosome, start and strand (2 golden rows affected).
-- **G3, effect of dropping the 2-decimal rounding** (rule 2 default). Not measured; to be measured when implementing (features called, kept and replicable on the test set) and recorded in the quirk table.
+None. Settled at implementation (DL-073):
+- **G1, kernel precision:** compat needs single-precision weights (rule 3).
+- **G2, tie order:** rule 11's order; the golden test compares `end_features.bed` after sorting by chromosome, start and strand. flower_2 has one tied pair that the original wrote minus first.
+- **G3, effect of the exact difference:** measured, in the quirk table.
 
 ## Decided
-- `--body_strand unstranded` → DL-069; G1 procedure → DL-071.
+- `--body_strand unstranded` → DL-069; G1 procedure → DL-071; implementation, G1–G3 outcome → DL-073.
 - D1 → DL-065 (fix quirks 10–13, 37 with compat); D2 → DL-066 (no intermediate rounding in default; density rounding kept as the detection limit); D3 → DL-067 (9 columns, density bedgraphs only with `--write_density`); D4 → DL-068 (Laplace only).

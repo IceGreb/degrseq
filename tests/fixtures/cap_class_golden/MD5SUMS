@@ -1,0 +1,14 @@
+f1b11036f8f6d68567933fb2335c4fcc  golden/flower.capped.bed.gz
+6d55bc58b2c372f26b4b88d645dbce2e  golden/flower.minus.bedgraph.gz
+4afd92ab23309580830d22df888fab6a  golden/flower.noncapped.bed.gz
+76a220de95bca83bcb9a4f5f8bc5a1f8  golden/flower.peaks.bed.gz
+42147f28c0bc458f9ded55781e405627  golden/flower.plus.bedgraph.gz
+ec2b79e2209879edfa739e9ee4ebd83f  golden/flower.uG.minus.bedgraph.gz
+1ae71d1519a52ab683d070ee400182b5  golden/flower.uG.plus.bedgraph.gz
+e68ccd52b0a85111c23340253a6e6161  input/flower_1.uG.minus_mask.bedgraph.gz
+f06c669a69b471104ede2512efde18b0  input/flower_1.uG.plus_mask.bedgraph.gz
+bfb1c47e09ab43bfd9f3e2aad2589bd2  input/flower_2.uG.minus_mask.bedgraph.gz
+48677e2cdd37c8b7994e46a6857d2862  input/flower_2.uG.plus_mask.bedgraph.gz
+d43a0e217d3c651f0b8b9fb01b327761  input/flower_3.uG.minus_mask.bedgraph.gz
+7a6955c1c996806c26668c4f8b2bd73f  input/flower_3.uG.plus_mask.bedgraph.gz
+dd12e8b9804fbd9c0e097675d4f1c223  input/flower.rep.bed

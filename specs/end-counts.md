@@ -1,7 +1,7 @@
 # `end-counts`: behavioural spec
 
 Status: **approved** (18/10/2026); default mode implemented 18/10, `--nanopare_compat` 29/10 (golden fixture matched byte for byte) · Replaces (nanoPARE 6264d6f): `scripts/python_scripts/readmapIO.py`, called at `endMap.sh` l.472–509; BODY coverage merge (`bedgraph_combine.py`, l.531)
-Pipeline module: `modules/local/end_counts/` · Design-note section: §2.5 · Decisions: `package_build/degrseq_decision_log.md` DL-007–DL-017, DL-029
+Pipeline module: `modules/local/end_counts/` · Design-note section: §2.5 · Decisions: `package_build/degrseq_decision_log.md` DL-007–DL-017, DL-029, DL-079
 
 ## Purpose
 Turns aligned reads into per-nucleotide counts of RNA 5′ ends. For 5P libraries it also counts
@@ -101,6 +101,7 @@ Ends and cap rows are one nucleotide each, because downstream `bedtools map -o s
 - **Multimapper whose loci all share one key after rule 4:** treated as unique.
 - **All loci of a multimapper unusable except one:** treated as unique (rule 14) and counted in `unique_after_filter`.
 - **`XW` = 0:** the read contributes 0 everywhere but is still counted under its fate.
+- **Cap G over a genomic G (limitation):** STAR aligns it, the reclaim counts it as templated, and the read looks uncapped. Same in nanoPARE; ~20 % of capped reads in ag2251's simulation (DL-079).
 
 ## Quirks of the original
 | # (known_issues) | Original behaviour | Decision | Expected diff vs golden |

@@ -44,6 +44,30 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   `tests/fixtures/scale_factor_test_set/` (1.5 MB, gzipped).
 - `scale-factor --body_strand unstranded`: BODY plus + minus summed per nt as background for genes on both strands,
   for unstranded BODY libraries (DL-069). Default `reverse` unchanged (= nanoPARE's hard-coded flip).
+- `kde-peaks`: 5′-end features of a 5P library (EndGraph): scale × 5P − BODY, Laplace kernel density, runs of
+  positive density ≥ `--min_length`, density peaks, dominant 5P position, RPM filter; `--body_strand`
+  (`reverse`/`forward`/`unstranded`), `--write_density`, `--nanopare_compat`, stats JSON. Implements
+  `specs/kde-peaks.md` (DL-072, DL-073). Compat matches nanoPARE's golden EndGraph outputs on the test set
+  (density byte-identical; features identical up to the order of rows with equal start).
+
+- `cap-class`: capped / noncapped 5′-end features of a replicate group (EndClass, numeric part): per-nt
+  replicate sums of 5P and cap tracks, trim to signal, rightmost peak, uG fraction split; `--min_uug`,
+  `--min_reads`, `--decimals`, `--nanopare_compat`, stats JSON. Implements `specs/cap-class.md` (DL-087).
+  Compat matches nanoPARE's EndClass outputs on the test set (sum bedgraphs byte-identical; peaks and
+  capped/noncapped sets identical; 323 / 279). Fixture `tests/fixtures/cap_class_golden/` (415 kB).
+
+### Differences from nanoPARE (`cap-class`, see the spec's quirk table)
+
+- uG counted over the exact feature, no "+1 buffer"; ends and peak offsets 1 nt shorter (DL-074, known issue 15).
+- `--min_uug 0` calls every feature capped; compat keeps the automatic cutoff (DL-080, known issue 50).
+- Features keyed by chromosome, start, end and strand (known issues 52, 53).
+- Replicate sums exact, written with 4 decimals (DL-085); uG sums always written (DL-086).
+- Default mode stops when uG exceeds 5P in a feature (per-G cap track fed to default mode).
+- Not ported: gene counts tables (DL-076), cap-mask bedgraphs (EndMask).
+
+### Documentation
+
+- `end-counts` spec: limitation added, a cap G over a genomic G looks templated (DL-079).
 
 ### Fixed (external code review of `cb08476`, 30/10)
 - `end-counts`: an alignment past the reference end is an error, not a crash in
@@ -67,6 +91,16 @@ project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
   file per set, as the original.
 - Multi-line FASTA accepted; header descriptions dropped from IDs; duplicate IDs and empty
   sequences are errors.
+
+### Differences from nanoPARE (`kde-peaks`, see the spec's quirk table)
+
+- Full kernel (the original drops the +W weight), density stops at the chromosome end, feature end exclusive
+  (the original's is 1 nt short and leaves the last nt out of RPM and the dominant position), RPM over both
+  strands' total (the original uses twice the plus total), no 2-decimal rounding of the difference before smoothing.
+  Test set: replicable features 602 → 608 (DL-065, DL-066).
+- A chromosome missing from `--lengths` is an error (the original crashes or drops features silently).
+- No Gaussian kernel (DL-068); `--bandwidth` above 30 is an error (the original caps it silently).
+- Smoothed density only with `--write_density` (DL-067).
 
 ### Differences from nanoPARE (`end-counts`, see the spec's quirk table)
 

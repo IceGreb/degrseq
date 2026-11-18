@@ -8,12 +8,22 @@ import argparse
 import sys
 from collections.abc import Callable, Sequence
 
-from degrseq import __version__, cleavage_stats, end_counts, scale_factor, srna_shuffle
+from degrseq import (
+    __version__,
+    cap_class,
+    cleavage_stats,
+    end_counts,
+    kde_peaks,
+    scale_factor,
+    srna_shuffle,
+)
 
 # Subcommand name (hyphenated) -> module main, e.g. "end-counts": end_counts.main
 COMMANDS: dict[str, Callable[[Sequence[str]], None]] = {
+    "cap-class": cap_class.main,
     "cleavage-stats": cleavage_stats.main,
     "end-counts": end_counts.main,
+    "kde-peaks": kde_peaks.main,
     "scale-factor": scale_factor.main,
     "srna-shuffle": srna_shuffle.main,
 }

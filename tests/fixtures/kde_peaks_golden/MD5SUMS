@@ -1,0 +1,11 @@
+0b2cf84e4b5f190c9ff761cf9c905753  golden/flower_1.5P.minus_smooth.bedgraph.gz
+38f4186a5d892c16465427d67f37fa7c  golden/flower_1.5P.plus_smooth.bedgraph.gz
+0231cd6723beae28bb616f05d7065246  golden/flower_1.end_features.bed.gz
+ee7c5c4c54bf1d821d4cf8eb45a2b475  golden/flower_2.5P.minus_smooth.bedgraph.gz
+db0a9e03c920fd6bf0e572500f00bb86  golden/flower_2.5P.plus_smooth.bedgraph.gz
+3b823b18e0a9d05e10f5a2a1ebdfb57a  golden/flower_2.end_features.bed.gz
+26934a612cec6e7c63943e6a8f837aee  golden/flower_3.5P.minus_smooth.bedgraph.gz
+f651a5cb5d339d464f2ce29e428e163d  golden/flower_3.5P.plus_smooth.bedgraph.gz
+672337fa204b5139724542f4ae321c4f  golden/flower_3.end_features.bed.gz
+e0e8dbf5ec3384e586555663d5febeec  length.table
+4142bae2a0721784fac80170f653d00c  scale_factors.tsv
